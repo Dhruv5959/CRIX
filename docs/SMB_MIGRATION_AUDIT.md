@@ -541,8 +541,88 @@ so `psycopg` is not installed either. "Postgres-tested" is therefore **not** cla
 
 ### 11.7 Known deviations carried forward
 
-* Legacy event/analysis tables (`security_events`, `correlations`, `risk_results`, …) gain
-  `org_id` in **Phase 2** together with the SecurityEvent work, so every writer is updated
-  atomically. Phase-1 endpoints and the new tenant tables are already org-scoped.
+* The legacy user-scoped analysis tables were scheduled to **all** gain `org_id` in Phase 2.
+  **Delivered in Phase 2 (§12):** `security_events` (NOT NULL, resolved server-side) and
+  `connected_signals` (best-effort nullable label). `correlations`, `risk_results`,
+  `attribution_results`, `remediation_actions`, `remediation_plans`, `propagation_results`
+  and `audit_log` still carry `user_id` only and are deferred to the phases that rework
+  them — the delivered scope is recorded honestly in §12.6.
 * `app/db.py::init_db()` performs additive `ALTER TABLE ADD COLUMN` as a dev convenience; the
   Alembic chain is now the supported path and is self-sufficient.
+
+---
+
+## 12. Phase 2 completion record (2026-10-22)
+
+Phase 2 delivers the **Common Security Finding Format**: one normalized `SecurityEvent`
+schema, stable company-asset identity, and organization ownership of every finding.
+
+### 12.1 What changed
+
+| Area | Change |
+|---|---|
+| `app/schemas.py` | `SecurityEventSchema` extended with `org_id`, `asset_id`, `first_seen`, `last_seen`, `evidence`, `created_at`, `updated_at`; `EventStatus` still forbids any form of "safe because unknown". Added `sanitize_evidence`: malformed evidence (wrong type or >4096 chars) is **rejected**, credential-like content is **redacted and never stored** (key denylist `password`/`passwd`/`secret`/`token`/`credential`/`otp`/`key`/`session`; value denylist for JWT-, `sk-`/`AKIA`-, private-key- and address-shaped strings). |
+| `app/engine/entities.py` (new) | `identity_of` / `canonical_asset_id` / `resolve_asset` / `assert_asset_in_org`. Canonical equality only: emails lowercased+trimmed; scheme, trailing slash and `.git` stripped with the host lowercased and path case kept; a label with spaces is never an identity. No name-similarity merging. |
+| `app/engine/normalizer.py` | `org_id` is resolved **server-side** from the author's active membership (`resolve_org_id`, raises `OrgScopeError` for a user with no organization); a client-sent `org_id` is overwritten. Asset binding matches account identity (email / account id) against `org_assets` **inside that same organization**; no match means `NULL` (unknown, never a guess). `first_seen`/`last_seen` prefer the detector's source window and fall back to CRIX's own observation window, which survives re-checks (`replace_module_events`). Added `list_org_events` for tenant-scoped reads. |
+| `app/signals/{breach,password,phishing,permissions}.py`, `app/engine/graph.py` | Every emitted `SecurityEventSchema` now carries minimal sanitized `evidence`; breach findings additionally carry `first_seen`/`last_seen` when HIBP reports `BreachDate` (min/max over breaches). XposedOrNot reports no dates, so `evidence.first_breach_date` is `None` and `first_seen` is CRIX's first observation. The phishing path stores extracted indicators only — the submitted message body is never persisted. |
+| `app/routers/assets.py` | Asset ids are canonicalized on create and matched canonically on read/dependency, so the same repository or work address always maps to one asset; duplicate-by-another-spelling is a 409; cross-tenant ids stay 404; self-dependency is 422. |
+| `app/routers/accounts.py` | Account rows are labeled with the caller's organization, resolved server-side (best effort: a legacy user without a membership keeps `NULL`). |
+| `migrations/versions/c9d1e2f3a4b5_security_event_org_scope.py` (new) | Adds the columns above. Idempotent (existence-guarded, raw-driver introspection because SQLAlchemy's reflection cache is not invalidated by an in-migration batch rebuild) and reversible (batch rebuild, rows copied not dropped). Backfills `org_id` from each row's writer membership where one exists; a row with no membership keeps the empty sentinel, which matches no tenant query (fail-closed) — **nothing is deleted**. |
+| `scripts/seed_demo.py` | Mirrors the real writers: demo accounts get the org label, one company work-address asset is registered, and the seed prints how many findings are bound to a company asset. |
+
+### 12.2 Verified state (every command executed)
+
+| Check | Command | Result |
+|---|---|---|
+| Backend suite | `pytest` (backend) | **253 passed** (baseline 225 + 28 new in `tests/test_finding_schema.py`) |
+| Migration tests | `pytest tests/test_migrations.py` | 4 passed (empty → head; ORM-first → head no-op; `downgrade base` leaves only `alembic_version`; re-upgrade) |
+| Dev DB reset | `alembic downgrade base`, `upgrade head`, `scripts/seed_demo.py` | full cycle from empty works; `alembic_version = c9d1e2f3a4b5`; **0 findings with an empty `org_id`**; 9/9 findings bound to the company asset; 3 accounts org-labeled |
+| Risk engine unchanged | seed summary | risk 61.7 (HIGH), Shapley efficiency error 0.0, planner gap 0.00 % — identical to Phase 1 |
+| Frontend | `tsc --noEmit`, `vitest run`, `npm run build` | clean, **21 passed**, built in 13.2 s (Phase 2 is additive: the existing `/api/analysis/events` already returns the extended fields, so no UI change was required) |
+| Secret scan | persisted `evidence` of every seeded/seeded-by-test finding | no password-, token- or address-shaped values |
+
+New tests cover: schema bounds/enum/blank type, evidence redaction and size, identity
+canonicalization and distinctness, label-not-an-identity, asset canonicalization + duplicate
+409 + cross-org invisibility, client `org_id` overwritten, findings never binding across
+organizations, mail-account-vs-domain distinctness, live `REAL` labeling, `UNAVAILABLE`
+provider failure with its own evidence, source dates surfaced when present and **not invented**
+when absent, no secrets persisted, re-check without duplicates and with a preserved
+`first_seen`, and the API exposing the whole standardized field set.
+
+### 12.3 Postgres status — honestly NOT run (unchanged from §11.6)
+
+The suite was never executed against a real PostgreSQL server (no Docker, no local server,
+`psycopg` therefore not installed). Claim: **"DDL verified for the PostgreSQL dialect"**
+(`tests/test_postgres_dialect.py`), not "Postgres-tested". The new migration contains
+PostgreSQL branches (`information_schema` / `pg_indexes`), which are **not** executed here and
+are therefore untested on a real server.
+
+### 12.4 Privacy boundary deliberately kept
+
+There is **no org-wide "all findings" endpoint**. `normalizer.list_org_events` exists and is
+tested, but exposing other members' findings through the API would require the Phase 1
+admin-view audit path (member-level access, logged and visible to the member). Phase 2 keeps
+member findings on the member's own `/api/analysis/events` and stops at the persistence
+invariant, which is what the tenant-scoped phases need.
+
+### 12.5 Not done, not claimed
+
+* No risk formula, Shapley, planner, GraphRAG or correlation change (the seed's unchanged
+  numbers are the evidence); no ML retraining; no frontend redesign; OAuth stays frozen and
+  Instagram stays absent.
+* No paid dependency added; no fabricated metric.
+* The Phase 3 correlation work has **not** started.
+
+### 12.6 Deviations carried forward to Phase 3
+
+* `correlations`, `risk_results`, `attribution_results`, `remediation_actions`,
+  `remediation_plans`, `propagation_results`, `audit_log` still carry `user_id` only. Phase 3
+  is scheduled to add `org_id` to `correlations` (the one table it reworks); the rest stay
+  user-scoped until their own phase.
+* One column-level divergence between the two schema-creation paths: `security_events.org_id`
+  is `NOT NULL` in **both** (the migration adds it with `server_default ""`, backfilled to a
+  real organization wherever the writer has a membership; a leftover sentinel — impossible
+  through registration — matches no tenant query, so the invariant holds fail-closed), but
+  **`updated_at`** cannot be added as `NOT NULL` by SQLite `ALTER`, so it is nullable in
+  migrated databases while the ORM always writes it. Fresh (ORM-created) databases carry the
+  full `NOT NULL` set. `connected_signals.org_id` is nullable by design (best-effort label).

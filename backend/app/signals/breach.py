@@ -68,6 +68,11 @@ class EmailBreachLookup:
     checked_at: dt.datetime = field(
         default_factory=lambda: dt.datetime.now(dt.timezone.utc)
     )
+    # Source-supplied date range of the underlying breach records, when the
+    # provider exposes one. HIBP returns ``BreachDate``; XposedOrNot does not, so
+    # these stay None there. They are never invented (Phase 2, §2).
+    first_breach_date: dt.datetime | None = None
+    last_breach_date: dt.datetime | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -126,6 +131,25 @@ def lookup_email_breaches(
     )
 
 
+def _parse_breach_date(raw: object) -> dt.datetime | None:
+    """Parse a provider-supplied breach date. Returns None rather than guessing."""
+    if raw is None:
+        return None
+    if isinstance(raw, dt.datetime):
+        return raw if raw.tzinfo else raw.replace(tzinfo=dt.timezone.utc)
+    if isinstance(raw, dt.date):
+        return dt.datetime(raw.year, raw.month, raw.day, tzinfo=dt.timezone.utc)
+    if isinstance(raw, str) and raw.strip():
+        text = raw.strip().replace("Z", "+00:00")
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d"):
+            try:
+                value = dt.datetime.strptime(text, fmt)
+                return value.replace(tzinfo=dt.timezone.utc) if value.tzinfo is None else value
+            except ValueError:
+                continue
+    return None
+
+
 def _lookup_hibp(email: str, client: HIBPClient) -> EmailBreachLookup:
     checked_at = dt.datetime.now(dt.timezone.utc)
     try:
@@ -147,6 +171,13 @@ def _lookup_hibp(email: str, client: HIBPClient) -> EmailBreachLookup:
         str(b.get("Name", "unknown")) if isinstance(b, dict) else str(b)
         for b in breaches
     ]
+    # Source-supplied observation window (Phase 2 §2): only what HIBP actually
+    # reports; anything unparsable is dropped instead of approximated.
+    dates = [
+        parsed
+        for parsed in (_parse_breach_date(b.get("BreachDate")) for b in breaches if isinstance(b, dict))
+        if parsed is not None
+    ]
     return EmailBreachLookup(
         "hibp",
         FINDING,
@@ -154,6 +185,8 @@ def _lookup_hibp(email: str, client: HIBPClient) -> EmailBreachLookup:
         session_capable=any(classify_session_capability(b) for b in breaches if isinstance(b, dict)),
         data_classes_known=True,
         checked_at=checked_at,
+        first_breach_date=min(dates) if dates else None,
+        last_breach_date=max(dates) if dates else None,
     )
 
 
@@ -218,6 +251,13 @@ def check_breach(
                 source="simulated",
                 source_mode=SourceMode.SIMULATED,
                 status="FINDING",
+                # A SIMULATED scenario is its own evidence: the entered values,
+                # and the fact that no external source was consulted.
+                evidence={
+                    "scenario": "SIMULATED_SESSION_EXPOSURE",
+                    "mfa_bypass_capable": bool(simulated_mfa_bypass_capable),
+                    "external_source_consulted": False,
+                },
                 metadata={"mfa_bypass_capable": simulated_mfa_bypass_capable},
                 provenance=(
                     "SIMULATED exposure scenario entered by the user. No real "
@@ -263,6 +303,20 @@ def _breach_event(
                 ),
             }
         )
+        # Minimal, sanitized explanation facts (§4): what the provider said and
+        # when it said it. No address, no credential, nothing else.
+        evidence = {
+            "provider": lookup.provider,
+            "checked_at": lookup.checked_at.isoformat(),
+            "breach_count": count,
+            "breaches": lookup.breach_names[:MAX_BREACH_NAMES],
+            "first_breach_date": (
+                lookup.first_breach_date.isoformat() if lookup.first_breach_date else None
+            ),
+            "last_breach_date": (
+                lookup.last_breach_date.isoformat() if lookup.last_breach_date else None
+            ),
+        }
         return SecurityEventSchema(
             event_id=events.new_event_id(),
             user_id=user_id,
@@ -274,7 +328,12 @@ def _breach_event(
             source=lookup.provider,
             source_mode=SourceMode.REAL,
             detected_at=lookup.checked_at,
+            # Source-supplied window when the provider reports breach dates;
+            # otherwise None and the normalizer records CRIX's own observation.
+            first_seen=lookup.first_breach_date,
+            last_seen=lookup.last_breach_date,
             status="FINDING",
+            evidence=evidence,
             metadata=metadata,
             provenance=(
                 f"{provider_label(lookup.provider)} reported {count} indexed "
@@ -300,6 +359,11 @@ def _breach_event(
             source_mode=SourceMode.REAL,
             detected_at=lookup.checked_at,
             status=CHECKED_SAFE,
+            evidence={
+                "provider": lookup.provider,
+                "checked_at": lookup.checked_at.isoformat(),
+                "breach_count": 0,
+            },
             metadata=metadata,
             provenance=(
                 f"{provider_label(lookup.provider)} reported no indexed breach for "
@@ -327,6 +391,12 @@ def _breach_event(
         source_mode=SourceMode.UNAVAILABLE,
         detected_at=lookup.checked_at,
         status=UNAVAILABLE,
+        evidence={
+            "provider": lookup.provider,
+            "checked_at": lookup.checked_at.isoformat(),
+            "outcome": "UNAVAILABLE",
+            "reason": lookup.reason or "Provider unavailable.",
+        },
         metadata=metadata,
         provenance=(
             f"{provider_label(lookup.provider)} could not be consulted "
@@ -353,7 +423,15 @@ def _identity_event(
         source=lookup.provider,
         source_mode=SourceMode.REAL,
         detected_at=lookup.checked_at,
+        first_seen=lookup.first_breach_date,
+        last_seen=lookup.last_breach_date,
         status="FINDING",
+        evidence={
+            "provider": lookup.provider,
+            "checked_at": lookup.checked_at.isoformat(),
+            "breach_count": len(lookup.breach_names),
+            "breaches": lookup.breach_names[:MAX_BREACH_NAMES],
+        },
         metadata=metadata,
         provenance=(
             f"Identity (email) appears in {provider_label(lookup.provider)}'s "

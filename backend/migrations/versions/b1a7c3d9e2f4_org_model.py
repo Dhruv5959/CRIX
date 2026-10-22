@@ -13,8 +13,11 @@ Curated reference tables (provider_metadata, graph_relationships,
 knowledge_nodes, knowledge_edges, provider_capabilities) stay GLOBAL reference
 data and intentionally do not gain an org_id.
 
-The legacy user-scoped event/analysis tables gain their org_id in Phase 2
-together with the SecurityEvent work; see docs/SMB_MIGRATION_AUDIT.md.
+The legacy user-scoped event/analysis tables were scheduled here to gain
+their org_id in Phase 2; the Phase 2 work delivered that for
+``security_events`` (NOT NULL, server-resolved) and ``connected_signals``
+(best-effort label), and deferred the remaining analysis tables. The exact,
+honest scope is recorded in docs/SMB_MIGRATION_AUDIT.md §11.7.
 
 Revision ID: b1a7c3d9e2f4
 Revises: 9c3f21a04e12

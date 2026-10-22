@@ -6,6 +6,8 @@ module emits.
 from __future__ import annotations
 
 import datetime as dt
+import json
+import re
 from enum import Enum
 from typing import Any
 
@@ -315,14 +317,106 @@ class AccountResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# SecurityEvent (§4) — the single normalized schema
+# SecurityEvent (§4, Phase 2) — the single normalized schema
 # --------------------------------------------------------------------------- #
-class SecurityEventSchema(BaseModel):
-    """Normalized security event. ``severity``/``confidence`` here are the
-    module's *observation* strength; authoritative risk is computed server-side
-    by the risk engine and can never be injected by a client (§14)."""
+_EVIDENCE_KEY_DENYLIST = (
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "apikey",
+    "authorization",
+    "cookie",
+    "privatekey",
+    "credential",
+    "sessionid",
+    "sessioncookie",
+    "otp",
+    "ssn",
+    "bearer",
+)
 
-    event_id: str
+_EVIDENCE_VALUE_DENYLIST = (
+    re.compile(r"^eyJ[A-Za-z0-9_=-]{10,}\.[A-Za-z0-9_=-]{10,}"),  # JWT
+    re.compile(r"\bsk-[A-Za-z0-9]{16,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),  # full email address
+)
+
+EVIDENCE_MAX_CHARS = 4096
+REDACTED = "[REDACTED]"
+
+
+def sanitize_evidence(value: Any, *, path: str = "evidence") -> Any:
+    """Make evidence safe to persist (§4, §7).
+
+    Evidence holds the minimal facts needed to *explain* a finding — a provider
+    name, a checked-at timestamp, permission names, extracted hostnames. It must
+    never store a credential, a token, or a full email address (the asset
+    identity already records who it belongs to).
+
+    Two deliberately different behaviours:
+
+    * **Sensitive content is redacted, not rejected.** A provider error string
+      containing an address must never break a live check; the finding is kept
+      and the offending value is replaced.
+    * **Malformed structure is rejected** (the size limit and the Pydantic type
+      checks raise, so a malformed event cannot be persisted).
+
+    Returns a deep-copied, sanitized value.
+    """
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, sub in value.items():
+            flat = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if any(deny in flat for deny in _EVIDENCE_KEY_DENYLIST):
+                # Drop credential-like fields entirely.
+                continue
+            out[str(key)] = sanitize_evidence(sub, path=f"{path}.{key}")
+        return out
+    if isinstance(value, (list, tuple)):
+        return [sanitize_evidence(sub, path=f"{path}[{i}]") for i, sub in enumerate(value)]
+    if isinstance(value, str):
+        for pattern in _EVIDENCE_VALUE_DENYLIST:
+            if pattern.search(value):
+                return REDACTED
+        return value
+    if value is None or isinstance(value, (int, float, bool)):
+        return value
+    raise ValueError(f"{path}: unsupported evidence value type {type(value).__name__}.")
+
+
+class SecurityEventSchema(BaseModel):
+    """Normalized security event — the one contract every signal module emits.
+
+    ``severity``/``confidence`` here are the module's *observation* strength;
+    authoritative risk is computed server-side by the risk engine and can never
+    be injected by a client (§14).
+
+    Field mapping to the phase spec (adapted to this codebase rather than
+    duplicated):
+
+    * ``id``            -> ``event_id`` (unique, DB-enforced).
+    * ``org_id``        -> **resolved server-side** from the authenticated
+      user's membership. A client-sent value is always overwritten.
+    * ``asset_id``      -> stable ``org_assets.asset_id`` when the account maps
+      to a registered company asset **in the same organization**, else ``None``.
+    * ``source_type``   -> ``source_mode`` (REAL | USER_PROVIDED | SIMULATED |
+      FIXTURE | UNAVAILABLE).
+    * ``status``        -> lifecycle (FINDING | CHECKED_SAFE | NOT_CHECKED |
+      UNAVAILABLE | UNAVAILABLE_THROUGH_PROVIDER).
+    * ``evidence``      -> sanitized explanation facts; ``{}`` when the detector
+      recorded no separate evidence (explicitly "nothing recorded", never a
+      claim of safety).
+    * ``first_seen`` / ``last_seen`` -> observation window. ``last_seen`` is when
+      this observation was made; ``first_seen`` is ``None`` until there is a real
+      earlier observation (or a source-supplied date). Never back-filled with a
+      guess.
+    """
+
+    event_id: str = Field(min_length=1, max_length=64)
     user_id: str
     account_id: str
     event_type: str
@@ -335,6 +429,32 @@ class SecurityEventSchema(BaseModel):
     status: EventStatus = EventStatus.NOT_CHECKED
     metadata: dict[str, Any] = Field(default_factory=dict)
     provenance: str = ""
+    # --- Phase 2 additions ---
+    org_id: str | None = None
+    asset_id: str | None = None
+    first_seen: dt.datetime | None = None
+    last_seen: dt.datetime | None = None
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    # Row bookkeeping: filled in when the finding is read back from the
+    # database, ``None`` for a detector-built event. Never written from these
+    # values — the ORM sets them.
+    created_at: dt.datetime | None = None
+    updated_at: dt.datetime | None = None
+
+    @field_validator("event_type")
+    @classmethod
+    def _event_type_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("event_type must not be blank.")
+        return value
+
+    @field_validator("evidence")
+    @classmethod
+    def _evidence_is_sanitized(cls, value: dict[str, Any]) -> dict[str, Any]:
+        cleaned = sanitize_evidence(value)
+        if len(json.dumps(cleaned, default=str)) > EVIDENCE_MAX_CHARS:
+            raise ValueError("evidence exceeds the 4096-character limit; keep it minimal.")
+        return cleaned
 
 
 class SecurityEventResponse(BaseModel):
@@ -343,6 +463,8 @@ class SecurityEventResponse(BaseModel):
     event_id: str
     user_id: str
     account_id: str
+    org_id: str
+    asset_id: str | None
     event_type: str
     exposure_type: str | None
     severity: float
@@ -350,9 +472,14 @@ class SecurityEventResponse(BaseModel):
     source: str
     source_mode: str
     detected_at: dt.datetime
+    first_seen: dt.datetime | None
+    last_seen: dt.datetime | None
     status: str
+    evidence: dict[str, Any]
     metadata: dict[str, Any]
     provenance: str
+    created_at: dt.datetime
+    updated_at: dt.datetime
 
 
 # --------------------------------------------------------------------------- #

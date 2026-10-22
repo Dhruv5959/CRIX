@@ -9,10 +9,24 @@ from sqlalchemy.orm import Session
 
 from app.deps import get_current_user
 from app.db import get_db
+from app.engine.normalizer import OrgScopeError, resolve_org_id
 from app.models import ConnectedSignal, User
 from app.schemas import AccountCreate, AccountResponse
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
+
+
+def _resolve_org_id(db: Session, user_id: str) -> str | None:
+    """Best-effort organization label for an account row.
+
+    Every registered user has a membership, so this normally always succeeds; a
+    legacy user without one keeps ``NULL`` (which matches no tenant query) rather
+    than blocking the account from being connected.
+    """
+    try:
+        return resolve_org_id(db, user_id)
+    except OrgScopeError:
+        return None
 
 
 @router.get("", response_model=list[AccountResponse])
@@ -47,6 +61,9 @@ def create_account(
         )
     account = ConnectedSignal(
         user_id=current_user.id,
+        # Organization label resolved server-side from the caller's membership —
+        # never taken from the request body (Phase 2 §2).
+        org_id=_resolve_org_id(db, current_user.id),
         account_id=payload.account_id,
         label=payload.label,
         service_name=payload.service_name,

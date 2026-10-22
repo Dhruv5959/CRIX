@@ -117,6 +117,11 @@ def build_phishing_events(
                 confidence=0.0,
                 source="ml_classifier",
                 status="UNAVAILABLE",
+                evidence={
+                    "model_available": False,
+                    "model_version": result.model_version,
+                    "outcome": "UNAVAILABLE",
+                },
                 metadata={"reason": result.provenance},
                 provenance=result.provenance,
             )
@@ -136,6 +141,15 @@ def build_phishing_events(
                 confidence=round(max(0.5, result.confidence), 4),
                 source="ml_classifier",
                 status="FINDING",
+                evidence={
+                    "model_version": result.model_version,
+                    "classifier_label": "PHISHING",
+                    "boundary_distance": round(result.confidence, 4),
+                    # Extracted indicators only. The submitted message body is
+                    # never persisted (§7 / D6).
+                    "signals": result.signals,
+                    "message_body_stored": False,
+                },
                 metadata={"signals": result.signals, "model_version": result.model_version},
                 provenance=result.provenance,
             )
@@ -152,6 +166,13 @@ def build_phishing_events(
                     confidence=float(result.ai_generated_confidence or 0.5),
                     source="ml_classifier",
                     status="FINDING",
+                    evidence={
+                        "model_version": result.model_version,
+                        "detector": "ai_text_stylometry",
+                        "label": "LIKELY_AI_GENERATED",
+                        "confidence": result.ai_generated_confidence,
+                        "message_body_stored": False,
+                    },
                     metadata={"model_version": result.model_version},
                     provenance=(
                         "Stylometric AI-text detector indicates likely AI generation. "
@@ -171,6 +192,12 @@ def build_phishing_events(
                 confidence=round(0.5 + 0.5 * result.confidence, 4),
                 source="ml_classifier",
                 status="CHECKED_SAFE",
+                evidence={
+                    "model_version": result.model_version,
+                    "classifier_label": "LEGITIMATE",
+                    "boundary_distance": round(result.confidence, 4),
+                    "message_body_stored": False,
+                },
                 metadata={"model_version": result.model_version},
                 provenance="Classifier assessed the message as legitimate (below threshold).",
             )

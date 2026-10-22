@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app import audit
 from app.db import get_db
 from app.deps import get_current_membership, require_role
+from app.engine.entities import assert_asset_in_org, canonical_asset_id
 from app.models import AssetDependency, Membership, OrgAsset
 from app.schemas import (
     AssetDependencyCreate,
@@ -33,9 +34,13 @@ ADMIN_ROLES = (OrgRole.ORG_ADMIN.value,)
 
 
 def _get_asset(db: Session, org_id: str, asset_id: str) -> OrgAsset:
-    asset = db.scalar(
-        select(OrgAsset).where(OrgAsset.org_id == org_id, OrgAsset.asset_id == asset_id)
-    )
+    """Resolve an asset by stable id, **within this organization only**.
+
+    The lookup canonicalises both sides (URL/email/domain normalisation), so the
+    same repository or work address always maps to the same asset, while an id
+    belonging to another tenant is indistinguishable from a missing one (404).
+    """
+    asset = assert_asset_in_org(db, org_id, asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="Asset not found.")
     return asset
@@ -74,11 +79,15 @@ def create_asset(
     db: Session = Depends(get_db),
 ) -> OrgAsset:
     _validate_owner(db, membership.org_id, payload.owner_membership_id)
-    existing = db.scalar(
-        select(OrgAsset).where(
-            OrgAsset.org_id == membership.org_id, OrgAsset.asset_id == payload.asset_id
+    # Canonical identity (§3): the same repository URL or work address always
+    # stores as the same stable id, so findings can bind to it exactly.
+    canonical = canonical_asset_id(payload.asset_id)
+    if not canonical or len(canonical) > 64:
+        raise HTTPException(
+            status_code=422,
+            detail="asset_id must be a stable identifier of at most 64 characters.",
         )
-    )
+    existing = assert_asset_in_org(db, membership.org_id, canonical)
     if existing is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -86,7 +95,7 @@ def create_asset(
         )
     asset = OrgAsset(
         org_id=membership.org_id,
-        asset_id=payload.asset_id,
+        asset_id=canonical,
         asset_type=payload.asset_type,
         label=payload.label,
         service_name=payload.service_name,
@@ -180,22 +189,34 @@ def create_dependency(
 ) -> AssetDependency:
     # Both endpoints must exist in THIS organization — CRIX never invents edges
     # and never links across tenants.
-    _get_asset(db, membership.org_id, payload.from_asset_id)
-    _get_asset(db, membership.org_id, payload.to_asset_id)
-    existing = db.scalar(
+    from_id = canonical_asset_id(payload.from_asset_id)
+    to_id = canonical_asset_id(payload.to_asset_id)
+    if not from_id or not to_id or from_id == to_id:
+        raise HTTPException(
+            status_code=422,
+            detail="A dependency needs two distinct, stable asset identifiers.",
+        )
+    _get_asset(db, membership.org_id, from_id)
+    _get_asset(db, membership.org_id, to_id)
+    existing = None
+    for row in db.scalars(
         select(AssetDependency).where(
             AssetDependency.org_id == membership.org_id,
-            AssetDependency.from_asset_id == payload.from_asset_id,
-            AssetDependency.to_asset_id == payload.to_asset_id,
             AssetDependency.relationship_type == payload.relationship_type,
         )
-    )
+    ).all():
+        if (
+            canonical_asset_id(row.from_asset_id) == from_id
+            and canonical_asset_id(row.to_asset_id) == to_id
+        ):
+            existing = row
+            break
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Dependency already exists.")
     edge = AssetDependency(
         org_id=membership.org_id,
-        from_asset_id=payload.from_asset_id,
-        to_asset_id=payload.to_asset_id,
+        from_asset_id=from_id,
+        to_asset_id=to_id,
         relationship_type=payload.relationship_type,
         edge_source="ADMIN_DECLARED",
         weight=payload.weight,

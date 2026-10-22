@@ -36,6 +36,12 @@ def build_hygiene_events(
                 confidence=0.6,  # self-reported => moderate confidence
                 source="user_report",
                 status="FINDING",
+                evidence={
+                    "verified": False,
+                    "report_type": "self_reported",
+                    "reused_credential_count": len(reused),
+                    "reused_labels": [item.label for item in reused][:20],
+                },
                 metadata={"reused_labels": [item.label for item in reused][:20]},
                 provenance=_REPORT_PROVENANCE,
             )
@@ -53,6 +59,13 @@ def build_hygiene_events(
                 confidence=0.6,
                 source="user_report",
                 status="FINDING",
+                evidence={
+                    "verified": False,
+                    "report_type": "self_reported",
+                    "mfa_enabled": False,
+                    # None means "no method reported" — not a guessed method.
+                    "mfa_method": None,
+                },
                 metadata={"mfa_method": None},
                 provenance=_REPORT_PROVENANCE,
             )
@@ -70,6 +83,13 @@ def build_hygiene_events(
                 confidence=0.8,
                 source="curated_provider_table",
                 status="FINDING",
+                evidence={
+                    "verified": True,
+                    "provider": payload.provider,
+                    "provider_source": provider_source,
+                    "passkey_supported": True,
+                    "passkey_enabled": False,
+                },
                 metadata={
                     "provider": payload.provider,
                     "provider_source": provider_source,
@@ -93,6 +113,11 @@ def build_hygiene_events(
                 confidence=0.6,
                 source="user_report",
                 status="FINDING",
+                evidence={
+                    "verified": False,
+                    "report_type": "self_reported",
+                    "recovery_method": "sms_otp",
+                },
                 metadata={"recovery_method": "sms_otp"},
                 provenance=(
                     "User reports SMS one-time codes as a recovery method; SMS is "
@@ -113,6 +138,11 @@ def build_hygiene_events(
                 confidence=0.5,
                 source="user_report",
                 status="FINDING",
+                evidence={
+                    "verified": False,
+                    "report_type": "self_reported",
+                    "report": "repeated_unexpected_mfa_push_prompts",
+                },
                 metadata={},
                 provenance="User reports repeated unexpected MFA push prompts (push-bombing).",
             )

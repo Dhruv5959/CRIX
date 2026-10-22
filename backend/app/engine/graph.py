@@ -107,6 +107,14 @@ def dependency_events(
                 confidence=0.8,
                 source="curated_graph",
                 status="FINDING",
+                evidence={
+                    "source": "curated_graph_relationships",
+                    "dependent_count": len(item["dependents"]),
+                    "dependents": item["dependents"][:20],
+                    "pagerank": item["pagerank"],
+                    "normalized_pagerank": normalized,
+                    "curated": True,
+                },
                 metadata={
                     "dependents": item["dependents"][:20],
                     "pagerank": item["pagerank"],
@@ -131,6 +139,13 @@ def dependency_events(
                     confidence=0.6,
                     source="curated_graph",
                     status="FINDING",
+                    evidence={
+                        "source": "curated_graph_relationships",
+                        "dependent_count": len(item["dependents"]),
+                        "dependents": item["dependents"][:20],
+                        "central_account": item["service"],
+                        "normalized_pagerank": normalized,
+                    },
                     metadata={"dependents": item["dependents"][:20], "pagerank": item["pagerank"]},
                     provenance=(
                         "A high-centrality recovery/OAuth account also shows a "

@@ -6,10 +6,14 @@ Two tenancy layers coexist during the CRIX-SMB migration:
   ``invitations``, ``org_assets``, ``asset_dependencies``,
   ``admin_view_audit_log``) carry a non-nullable ``org_id``. Every query
   against them is scoped to the caller's membership organization.
-* **Legacy user-scoped tables** (events, correlations, risk results, plans,
-  propagation, audit log, connections) still carry a non-nullable ``user_id``.
-  They receive ``org_id`` in Phase 2 together with the SecurityEvent work, so
-  that every writer is updated atomically. See ``docs/SMB_MIGRATION_AUDIT.md``.
+* **Phase 2 scope — organization-owned findings.** ``security_events`` now
+  carries a non-nullable ``org_id`` written only by the normalizer (resolved
+  server-side from the author's membership), plus ``asset_id``,
+  ``first_seen``/``last_seen``, ``evidence`` and ``updated_at``.
+  ``connected_signals`` carries a best-effort ``org_id`` label. The remaining
+  user-scoped analysis tables (correlations, risk results, plans,
+  propagation, audit log) keep ``user_id`` only until the phase that
+  reworks them; see ``docs/SMB_MIGRATION_AUDIT.md`` §11.7.
 
 Curated reference tables (``provider_metadata``, ``provider_capabilities``,
 ``graph_relationships``, ``knowledge_nodes``, ``knowledge_edges``) are GLOBAL
@@ -128,6 +132,10 @@ class ConnectedSignal(Base, TimestampMixin):
 
     ``source`` records provenance: ``hibp`` (real), ``manual`` or ``simulated``
     (user-entered, clearly labeled in the UI), etc.
+
+    Phase 2: the row is organization-owned. ``org_id`` is resolved server-side
+    from the authenticated user's membership when the account is created, so an
+    account can never be registered into someone else's tenant.
     """
 
     __tablename__ = "connected_signals"
@@ -136,6 +144,9 @@ class ConnectedSignal(Base, TimestampMixin):
     )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    org_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True
+    )
     user_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
@@ -150,7 +161,17 @@ class ConnectedSignal(Base, TimestampMixin):
 
 
 class SecurityEvent(Base, TimestampMixin):
-    """The single normalized schema shared by every signal module (§4)."""
+    """The single normalized schema shared by every signal module (§4, Phase 2).
+
+    Organization scope: every finding belongs to exactly one organization.
+    ``org_id`` is resolved server-side from the authenticated user's membership
+    at persist time — it is never taken from a request body.
+
+    ``asset_id`` is the stable ``org_assets.asset_id`` of the affected COMPANY
+    asset when one can be matched **exactly, within the same organization**
+    (see ``app/engine/entities.py``); it stays ``None`` when unknown rather than
+    being guessed. A finding never binds to an asset from another tenant.
+    """
 
     __tablename__ = "security_events"
     __table_args__ = (
@@ -159,10 +180,16 @@ class SecurityEvent(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     event_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    org_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False
+    )
     user_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
     account_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Stable company-asset id when known; NULL = "not mapped to a registered
+    # company asset" (explicit unknown, never an invented identifier).
+    asset_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     event_type: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     exposure_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
     severity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
@@ -172,9 +199,19 @@ class SecurityEvent(Base, TimestampMixin):
     detected_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_now, nullable=False
     )
+    # Observation window. ``first_seen`` stays NULL until there is a real earlier
+    # observation; it is never back-filled with a guess.
+    first_seen: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="NOT_CHECKED")
+    # Sanitized facts that explain the finding. No credentials, tokens or raw
+    # email addresses (validated in app.schemas).
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     provenance: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, nullable=False
+    )
 
 
 class ProviderMetadata(Base):

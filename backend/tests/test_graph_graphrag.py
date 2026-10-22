@@ -40,8 +40,10 @@ def test_graphrag_explanation_is_grounded(db_session):
 
     # Seed some events so the pipeline has context.
     from app.engine import normalizer
-    from tests.helpers import ev
+    from tests.helpers import ev, seed_org_for_user
 
+    # Findings are organization-owned: give the test author its membership first.
+    seed_org_for_user(db_session, "user-1")
     normalizer.persist_events(
         db_session,
         [

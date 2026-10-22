@@ -194,9 +194,12 @@ def _seed_signal(db, user_id, account_id, label="Acct", service="Acct", source_m
 def _seed_event(db, user_id, account_id, event_type, status="FINDING", severity=0.6):
     import uuid
 
+    from app.engine.normalizer import resolve_org_id
+
     db.add(
         SecurityEvent(
             event_id=f"evt_{uuid.uuid4().hex[:12]}",
+            org_id=resolve_org_id(db, user_id),
             user_id=user_id,
             account_id=account_id,
             event_type=event_type,

@@ -24,6 +24,7 @@ from app.models import (  # noqa: E402
     AccountRelationship,
     ConnectedSignal,
     Membership,
+    OrgAsset,
     Organization,
     User,
 )
@@ -69,7 +70,16 @@ def _ensure_user(db, email: str, password: str) -> User:
     return user
 
 
-def _ensure_account(db, user_id: str, account_id: str, label: str, service: str, source: str) -> None:
+def _ensure_account(
+    db,
+    user_id: str,
+    org_id: str,
+    account_id: str,
+    label: str,
+    service: str,
+    source: str,
+    email: str | None = None,
+) -> None:
     existing = db.scalar(
         select(ConnectedSignal).where(
             ConnectedSignal.user_id == user_id, ConnectedSignal.account_id == account_id
@@ -80,10 +90,14 @@ def _ensure_account(db, user_id: str, account_id: str, label: str, service: str,
     db.add(
         ConnectedSignal(
             user_id=user_id,
+            # Mirrors POST /api/accounts: the organization label is resolved
+            # server-side from the writer's membership (Phase 2 §2).
+            org_id=org_id,
             account_id=account_id,
             label=label,
             service_name=service,
             platform="web",
+            email=email,
             source=source,
             metadata_json={"service_name": service},
         )
@@ -113,19 +127,48 @@ def _ensure_org(db, user: User, name: str) -> Membership:
     return membership
 
 
-def _ensure_demo_accounts(db, user_id: str) -> None:
+def _ensure_demo_assets(db, membership: Membership, work_email: str) -> str:
+    """Register one company-owned asset so findings can bind to it (§3).
+
+    Registration normally happens through ``POST /api/assets``; the seed mirrors
+    it with the same canonicalization so the demo shows a finding attached to a
+    real company asset instead of an unbound account.
+    """
+    from app.engine.entities import canonical_asset_id
+
+    asset_id = canonical_asset_id(work_email)
+    existing = db.scalar(
+        select(OrgAsset).where(OrgAsset.org_id == membership.org_id, OrgAsset.asset_id == asset_id)
+    )
+    if existing is None:
+        db.add(
+            OrgAsset(
+                org_id=membership.org_id,
+                asset_id=asset_id,
+                asset_type="WORK_EMAIL",
+                label="Company work address",
+                service_name="Google",
+                criticality=4,
+                owner_membership_id=membership.id,
+            )
+        )
+        db.commit()
+    return asset_id
+
+
+def _ensure_demo_accounts(db, user_id: str, org_id: str, work_email: str) -> None:
     """Three COMPANY work accounts for the demo, all USER_REPORTED.
 
     OAuth connectors are frozen (§1.4): nothing here creates a
     ``ProviderConnection`` or contacts a provider API. The accounts are labeled
     ``user_reported`` so they are never presented as live provider data.
     """
-    for account_id, label, service in (
-        ("google-main", "Primary Gmail", "Google"),
-        ("github-main", "Work GitHub", "GitHub"),
-        ("slack-main", "Company Slack", "Slack"),
+    for account_id, label, service, email in (
+        ("google-main", "Primary Gmail", "Google", work_email),
+        ("github-main", "Work GitHub", "GitHub", None),
+        ("slack-main", "Company Slack", "Slack", None),
     ):
-        _ensure_account(db, user_id, account_id, label, service, "user_reported")
+        _ensure_account(db, user_id, org_id, account_id, label, service, "user_reported", email)
 
 
 def _ensure_demo_relationships(db, user_id: str) -> None:
@@ -187,7 +230,8 @@ def main() -> None:
         # Compromise Propagation demo works with no OAuth and no provider API.
         # A Google account that is a recovery hub for the other services, with a
         # breach + reused password + no MFA + SMS recovery + risky app.
-        _ensure_demo_accounts(db, user.id)
+        _ensure_demo_assets(db, membership, args.email)
+        _ensure_demo_accounts(db, user.id, membership.org_id, args.email)
         _ensure_demo_relationships(db, user.id)
 
         # Breach finding on Google (SIMULATED scenario, clearly labeled).
@@ -252,6 +296,8 @@ def main() -> None:
         print(f"Role:      ORG_ADMIN of organization {membership.org_id}")
         print("=" * 60)
         print(f"Events:        {len(result['events'])}")
+        bound = [e for e in result["events"] if getattr(e, "asset_id", None)]
+        print(f"  bound to a company asset: {len(bound)}")
         print(f"Correlations:  {len(result['correlations'])}")
         for c in result["correlations"]:
             print(f"   - {c.rule_id}  severity={c.severity:.2f}")

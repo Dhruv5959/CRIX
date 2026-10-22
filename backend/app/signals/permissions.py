@@ -92,6 +92,16 @@ def build_permission_events(
                     confidence=0.7,
                     source="manual_entry",
                     status="FINDING",
+                    evidence={
+                        "app_name": entry.app_name,
+                        "platform": entry.platform,
+                        "classified_against": "curated_permission_taxonomy",
+                        "high_sensitivity": [c["permission"] for c in high],
+                        "medium_sensitivity": [c["permission"] for c in medium],
+                        "high_sensitivity_count": len(high),
+                        "medium_sensitivity_count": len(medium),
+                        "stale": stale,
+                    },
                     metadata={
                         "app_name": entry.app_name,
                         "platform": entry.platform,
@@ -118,6 +128,13 @@ def build_permission_events(
                         confidence=0.7,
                         source="manual_entry",
                         status="FINDING",
+                        evidence={
+                            "app_name": entry.app_name,
+                            "high_sensitivity": [c["permission"] for c in high],
+                            # None = "no use recorded", never an invented date.
+                            "last_used_at": entry.last_used_at.isoformat() if entry.last_used_at else None,
+                            "stale_after_days": stale_after,
+                        },
                         metadata={"app_name": entry.app_name, "last_used_at": entry.last_used_at.isoformat() if entry.last_used_at else None},
                         provenance=(
                             f"High-sensitivity grant with no recorded use for over "
