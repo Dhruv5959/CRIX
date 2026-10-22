@@ -232,6 +232,31 @@ Properties tested:
   cascading-recovery correlation.
 - The UI and GraphRAG always present these as *curated / static*.
 
+### 8.1 Organization asset dependency graph (Phase 6, `backend/app/engine/org_graph.py`)
+
+A second, organization-scoped graph answers a different question —
+**potential exposure between the company's own registered assets along
+administrator-declared relationships**. Full specification: `docs/ORG_GRAPH.md`.
+
+- **Nodes** = `OrgAsset` rows keyed by canonical asset id (no name-merging);
+  **edges** = `AssetDependency` rows restricted to six documented types
+  (`RESETS_PASSWORD`, `HAS_ACCESS_TO`, `DEPLOYS_TO` forward; `DEPENDS_ON`,
+  `USES` reverse; `INTEGRATES_WITH` bidirectional). NetworkX `MultiDiGraph`.
+- Every query is org-scoped at the database layer; a foreign asset id is a
+  generic 404. Unsupported, dangling, and duplicate rows are skipped and
+  counted, never traversed or silently dropped.
+- Operations A–G (payload, neighbors, reachability, paths, blast radius,
+  critical-asset exposure, per-step evidence) are deterministic, depth- and
+  count-bounded, and report `truncated` honestly. Paths are simple (no
+  repeated nodes), so cyclic graphs are never fully enumerated.
+- Provenance labels (`REGISTERED_ASSET`, `ADMIN_DECLARED`, `DERIVED_PATH`)
+  distinguish what CRIX registered, what an admin declared, and what CRIX
+  derived; `PROVIDER_DISCOVERED`/`MODEL_INFERRED` are documented as
+  "Not produced by this system".
+- The graph **never** claims an attack or compromise occurred, and **never**
+  changes the authoritative risk score or attribution (compatibility tests
+  assert bit-identical Phase 4/5 results after every graph operation).
+
 ---
 
 ## 9. Remediation planner (`backend/app/engine/planner.py`)

@@ -844,3 +844,73 @@ on PostgreSQL here. Claim: "DDL verified for the PostgreSQL dialect" only.
   (in a disclaimer); reworded to avoid any causation verb so the copy never
   claims causation even inside a negation.
 * PostgreSQL not run (§15.3); supersedes nothing in §14 (Phase 4 record stands).
+
+---
+
+## 16. Phase 6 completion record (2026-10-23)
+
+**Commit:** (see `docs/PROGRESS.md`) · **Tag:** `phase-6-done`
+**Change:** an organization-scoped company asset dependency graph that
+answers the potential-exposure question using only existing `OrgAsset` and
+`AssetDependency` rows, NetworkX, and honest provenance. The graph never
+claims a compromise and never changes the authoritative risk score.
+Specification: `docs/ORG_GRAPH.md`.
+
+### 16.1 What changed
+
+| Area | Change |
+|---|---|
+| `app/engine/org_graph.py` | **New.** `MultiDiGraph` from registered assets (canonical-id nodes) + declared dependencies (supported types only). Forward/reverse/both exposure semantics per relationship type; canonical type matching (unknowns never coerced); build statistics counting skipped unsupported/dangling/duplicate rows; deterministic bounded operations A–G (payload, neighbors, reachability, paths, blast radius, critical-asset exposure, per-step evidence). Provenance labels distinguish registered/admin-declared/derived; `PROVIDER_DISCOVERED`/`MODEL_INFERRED` are documented as "Not produced by this system". |
+| `app/routers/graph.py` | Personal `/api/graph` untouched; new `GET /api/org/graph{,/neighbors,/paths,/blast-radius,/critical-exposure}` — membership-required, org-scoped, generic 404, bounded parameters (422), `GraphTooLargeError` → 413, disclaimer on every response. |
+| `app/routers/assets.py` | Relationship-type validation after auth + asset-existence (403/404 precedence preserved); canonical UPPERCASE storage; canonical duplicate comparison; `GET /api/dependencies/{id}` (evidence, all roles); `PATCH /api/dependencies/{id}` (ORG_ADMIN, audited, endpoints not rewritable, 409/422). |
+| `app/schemas.py` | `AssetDependencyUpdate`. |
+| Frontend | `OrgGraph*` types; four API methods; pure `lib/orgGraph.ts` mapping helper + 10 vitest tests; minimal GraphPage org section with the server's disclaimer verbatim. |
+| `scripts/seed_demo.py` | 3 additional demo assets + 3 admin-declared relationships + graph summary print (idempotent). |
+| Docs | `docs/ORG_GRAPH.md` (new); PROGRESS.md Phase 6 entry; this section; ARCHITECTURE §8.1. |
+
+### 16.2 Verified state (every command executed)
+
+| Check | Command | Result |
+|---|---|---|
+| Full backend suite | `python -m pytest` | **380 passed, exit 0** (350 prior + 30 new) |
+| Graph tests | `pytest tests/test_org_graph_phase6.py` | **30 passed, exit 0** |
+| Frontend | `tsc --noEmit` / `vitest run` / `npm run build` | exit 0 / **31 passed** / exit 0 |
+| Demo seed | `python scripts/seed_demo.py` | 4 assets, 3 relationships; potential exposure 1 asset / 1 critical; risk 67.9 (HIGH) unchanged; Shapley err 0.0; planner gap 0.00% |
+| Smoke (dev DB) | TestClient script | 401/200/201/404/409/422 behaviors all as specified |
+
+### 16.3 Postgres status — honestly NOT run (unchanged from §11.6 / §12.3 / §13.3 / §14.3 / §15.3)
+
+No Docker, no local server, `psycopg` not installed. Phase 6 adds **no
+migration** (§5.11 reuse of `uq_asset_dependency` + org_id indexes was the
+design and is what shipped); the existing DDL was not exercised on
+PostgreSQL here. Claim: "DDL verified for the PostgreSQL dialect" only.
+
+### 16.4 Not done, not claimed
+
+* The graph documents relationships; it never asserts that an attack or
+  compromise occurred, and no response labels a reachable asset as
+  breached, hacked, or compromised.
+* The graph never changes the authoritative risk score or its inputs —
+  compatibility tests assert bit-identical Phase 4/Phase 5 results before
+  and after every graph operation.
+* No `PROVIDER_DISCOVERED` or `MODEL_INFERRED` edge is ever produced; both
+  labels are documented as "Not produced by this system".
+* No new risk formula, no ML, no OAuth change, no paid dependency, no
+  migration, no unrelated subsystem.
+* Cyclic graphs are never fully enumerated (simple paths only).
+
+### 16.5 Deviations and findings carried forward
+
+* The pre-implementation plan predicted the demo's first seeded edge would
+  fire `declared_dependency_exposure` (correlations 2→3). It does not, and
+  the engine is right: the demo's `BREACH_EXPOSURE` event carries
+  `status=UNAVAILABLE` (offline HIBP fixture never confirmed it), while the
+  rule requires a `FINDING`. Demo correlations correctly stay at 2, so
+  `PRESENTATION.md` / `IMPLEMENTATION_STATUS.md` needed no edit.
+* Three honesty fixes made while writing tests: neighbor `direction` uses
+  the exposure-arc direction; `reachable` flags `truncated` when unexplored
+  nodes remain past the depth bound; org-wide `critical_exposure` traverses
+  *toward* the critical asset and presents paths in true exposure
+  direction.
+* PostgreSQL not run (§16.3); supersedes nothing in §15 (Phase 5 record
+  stands).

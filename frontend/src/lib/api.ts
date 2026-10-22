@@ -11,6 +11,10 @@ import type {
   GraphPayload,
   Health,
   OAuthProviderInfo,
+  OrgGraphBlastRadius,
+  OrgGraphNeighbors,
+  OrgGraphPayload,
+  OrgGraphPaths,
   PhishingResult,
   PropagationAccount,
   ProviderCapability,
@@ -174,6 +178,23 @@ export const api = {
 
   // --- graph / planner / knowledge ---
   graph: () => request<GraphPayload>("/api/graph"),
+  // Organization asset dependency graph (Phase 6, §5): potential exposure
+  // along declared relationships — never a claim of compromise.
+  orgGraph: () => request<OrgGraphPayload>("/api/org/graph"),
+  orgGraphNeighbors: (assetId: string, direction: "in" | "out" | "both" = "both") =>
+    request<OrgGraphNeighbors>(
+      `/api/org/graph/neighbors?asset_id=${encodeURIComponent(assetId)}&direction=${direction}`,
+    ),
+  orgGraphPaths: (source: string, target: string, maxDepth?: number) => {
+    const params = new URLSearchParams({ source, target });
+    if (maxDepth !== undefined) params.set("max_depth", String(maxDepth));
+    return request<OrgGraphPaths>(`/api/org/graph/paths?${params.toString()}`);
+  },
+  orgGraphBlastRadius: (assetId: string, maxDepth?: number) => {
+    const params = new URLSearchParams({ asset_id: assetId });
+    if (maxDepth !== undefined) params.set("max_depth", String(maxDepth));
+    return request<OrgGraphBlastRadius>(`/api/org/graph/blast-radius?${params.toString()}`);
+  },
   plannerPlan: (budget = 6) =>
     request<{ budget: number; comparison: unknown; note: string }>(
       `/api/planner/plan?budget=${budget}`,

@@ -265,6 +265,18 @@ class AssetDependencyCreate(BaseModel):
     note: str = Field(default="", max_length=500)
 
 
+class AssetDependencyUpdate(BaseModel):
+    """Partial update of a declared dependency (Phase 6, §5.10).
+
+    Endpoints cannot be rewritten — deleting and re-declaring is explicit and
+    auditable, while a note/weight/type correction is a legitimate edit.
+    """
+
+    relationship_type: str | None = Field(default=None, min_length=1, max_length=40)
+    weight: float | None = Field(default=None, ge=0.0, le=1.0)
+    note: str | None = Field(default=None, max_length=500)
+
+
 class AssetDependencyResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

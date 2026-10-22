@@ -22,6 +22,7 @@ from app.db import SessionLocal, init_db  # noqa: E402
 from app.engine import normalizer, pipeline  # noqa: E402
 from app.models import (  # noqa: E402
     AccountRelationship,
+    AssetDependency,
     ConnectedSignal,
     Membership,
     OrgAsset,
@@ -156,6 +157,85 @@ def _ensure_demo_assets(db, membership: Membership, work_email: str) -> str:
     return asset_id
 
 
+# SYNTHETIC demo company assets and relationships for the Phase 6 organization
+# graph (§5). These are ADMIN_DECLARED exactly as an admin would register them;
+# nothing is provider-discovered or model-inferred.
+DEMO_ORG_ASSETS = (
+    # (asset_id, asset_type, label, criticality)
+    ("github.com/acme/api", "CODE_REPOSITORY", "Primary API repository", 5),
+    ("ci.acme.example", "CI_SYSTEM", "Build & deploy pipeline", 4),
+    ("acme-backup", "CLOUD_STORAGE", "Nightly offsite backups", 3),
+)
+DEMO_ORG_EDGES = (
+    # (from, to, relationship_type, note)
+    ("demo@example.com", "github.com/acme/api", "RESETS_PASSWORD",
+     "Password reset for the repository account routes through the work mailbox."),
+    ("github.com/acme/api", "acme-backup", "DEPENDS_ON",
+     "Recovery from backups depends on the repository's restore runbook."),
+    ("ci.acme.example", "github.com/acme/api", "DEPLOYS_TO",
+     "The pipeline pushes releases to the repository."),
+)
+
+
+def _ensure_demo_org_graph(db, membership: Membership, work_email: str) -> None:
+    """Register the demo company assets and declare their relationships (§5).
+
+    Idempotent: re-running the seed never duplicates an asset or an edge. The
+    graph answers potential-exposure questions only — it never claims an
+    attack or compromise occurred.
+    """
+    from app.engine.entities import canonical_asset_id
+
+    known: set[str] = {canonical_asset_id(work_email)}
+    for asset_id, asset_type, label, criticality in DEMO_ORG_ASSETS:
+        canonical = canonical_asset_id(asset_id)
+        known.add(canonical)
+        existing = db.scalar(
+            select(OrgAsset).where(
+                OrgAsset.org_id == membership.org_id, OrgAsset.asset_id == canonical
+            )
+        )
+        if existing is None:
+            db.add(
+                OrgAsset(
+                    org_id=membership.org_id,
+                    asset_id=canonical,
+                    asset_type=asset_type,
+                    label=label,
+                    criticality=criticality,
+                    owner_membership_id=membership.id,
+                )
+            )
+            db.commit()
+
+    for from_id, to_id, rel_type, note in DEMO_ORG_EDGES:
+        source = canonical_asset_id(from_id)
+        target = canonical_asset_id(to_id)
+        if source not in known or target not in known:
+            continue
+        existing = db.scalar(
+            select(AssetDependency).where(
+                AssetDependency.org_id == membership.org_id,
+                AssetDependency.from_asset_id == source,
+                AssetDependency.to_asset_id == target,
+                AssetDependency.relationship_type == rel_type,
+            )
+        )
+        if existing is None:
+            db.add(
+                AssetDependency(
+                    org_id=membership.org_id,
+                    from_asset_id=source,
+                    to_asset_id=target,
+                    relationship_type=rel_type,
+                    edge_source="ADMIN_DECLARED",
+                    weight=1.0,
+                    note=note,
+                )
+            )
+            db.commit()
+
+
 def _ensure_demo_accounts(db, user_id: str, org_id: str, work_email: str) -> None:
     """Three COMPANY work accounts for the demo, all USER_REPORTED.
 
@@ -231,6 +311,7 @@ def main() -> None:
         # A Google account that is a recovery hub for the other services, with a
         # breach + reused password + no MFA + SMS recovery + risky app.
         _ensure_demo_assets(db, membership, args.email)
+        _ensure_demo_org_graph(db, membership, args.email)
         _ensure_demo_accounts(db, user.id, membership.org_id, args.email)
         _ensure_demo_relationships(db, user.id)
 
@@ -312,6 +393,25 @@ def main() -> None:
         print(f"Planner:       greedy risk_after={result['planner']['greedy']['risk_after']:.1f} "
               f"exact risk_after={result['planner']['exact']['risk_after']:.1f} "
               f"gap={result['planner']['optimality_gap']:.2%}")
+
+        # Organization asset dependency graph summary (Phase 6, §5). This shows
+        # POTENTIAL EXPOSURE along declared relationships only — never a claim
+        # that any asset was actually compromised.
+        from app.engine import org_graph as orggraph
+
+        graph_payload = orggraph.graph_payload(db, membership.org_id)
+        print(f"Org graph:     {graph_payload['stats']['assets']} assets, "
+              f"{graph_payload['stats']['relationships']} declared relationships")
+        # Blast radius of the work mailbox: what MIGHT be exposed if it were
+        # compromised, per the relationships an admin declared.
+        graph_obj, _ = orggraph.build_org_graph(db, membership.org_id)
+        radius = orggraph.blast_radius(graph_obj, args.email)
+        print(f"  potential exposure from {args.email}: {radius['count']} asset(s), "
+              f"{radius['critical_count']} critical")
+        for entry in radius["potential_exposure"]:
+            print(f"    -> {entry['asset_id']} (depth {entry['depth']}, "
+                  f"criticality {entry['criticality']})")
+        print(f"  {radius['disclaimer']}")
         print("=" * 60)
         print("Log in at http://localhost:5173 with the demo credentials above.")
     finally:

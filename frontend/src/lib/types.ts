@@ -203,6 +203,128 @@ export interface GraphPayload {
   provenance: string;
 }
 
+// --- organization asset dependency graph (Phase 6, §5) --------------------- //
+// Reports POTENTIAL EXPOSURE along administrator-declared relationships.
+// It is never evidence that an attack or compromise occurred.
+
+/** One traversal step's structured explanation (operation G). */
+export interface OrgGraphStep {
+  from_asset_id: string;
+  to_asset_id: string;
+  traversed_from: string | null;
+  traversed_to: string | null;
+  relationship_id: string;
+  relationship_type: string;
+  directed: boolean;
+  exposure: "forward" | "reverse" | "both";
+  traversal_condition: string;
+  evidence: {
+    edge_source: string;
+    note: string;
+    note_present: boolean;
+    declared_at: string | null;
+  };
+  uncertainty: string[];
+  provenance: string;
+  criticality_of_target: number;
+}
+
+export interface OrgGraphNode {
+  asset_id: string;
+  asset_type: string;
+  label: string;
+  criticality: number;
+  source_mode: string;
+  provenance: string;
+}
+
+export interface OrgGraphEdge {
+  relationship_id: string;
+  from_asset_id: string;
+  to_asset_id: string;
+  relationship_type: string;
+  directed: boolean;
+  exposure: "forward" | "reverse" | "both";
+  edge_source: string;
+  weight: number;
+  note: string;
+  declared_at: string | null;
+  provenance: string;
+}
+
+export interface OrgGraphPayload {
+  nodes: OrgGraphNode[];
+  edges: OrgGraphEdge[];
+  stats: {
+    assets: number;
+    relationships: number;
+    skipped_unsupported_type: number;
+    skipped_dangling_endpoint: number;
+    duplicate_edges_skipped: number;
+  };
+  limits: Record<string, number>;
+  provenance_labels: Record<string, string>;
+  supported_relationship_types: string[];
+  disclaimer: string;
+}
+
+export interface OrgGraphNeighbor {
+  asset_id: string;
+  label: string;
+  asset_type: string;
+  criticality: number;
+  direction: "in" | "out";
+  relationship: OrgGraphStep;
+}
+
+export interface OrgGraphNeighbors {
+  asset_id: string;
+  criticality: number;
+  direction: string;
+  neighbors: OrgGraphNeighbor[];
+  count: number;
+  disclaimer: string;
+}
+
+export interface OrgGraphReachEntry {
+  asset_id: string;
+  label: string;
+  asset_type: string;
+  criticality: number;
+  depth: number;
+  exposure_path: OrgGraphStep[];
+  via_relationship: OrgGraphStep;
+}
+
+export interface OrgGraphPath {
+  assets: string[];
+  length: number;
+  steps: OrgGraphStep[];
+  provenance: string;
+}
+
+export interface OrgGraphPaths {
+  source_asset_id: string;
+  target_asset_id: string;
+  max_depth: number;
+  max_paths: number;
+  paths: OrgGraphPath[];
+  count: number;
+  truncated: boolean;
+  disclaimer: string;
+}
+
+export interface OrgGraphBlastRadius {
+  asset_id: string;
+  max_depth: number;
+  potential_exposure: OrgGraphReachEntry[];
+  count: number;
+  critical_assets: OrgGraphReachEntry[];
+  critical_count: number;
+  truncated: boolean;
+  disclaimer: string;
+}
+
 export interface PhishingResult {
   label: string;
   confidence: number;

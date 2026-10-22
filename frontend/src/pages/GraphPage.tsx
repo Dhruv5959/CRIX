@@ -1,18 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D from "react-force-graph-2d";
 import { api } from "@/lib/api";
-import type { GraphPayload } from "@/lib/types";
+import type { GraphPayload, OrgGraphPayload } from "@/lib/types";
+import { toOrgGraphView } from "@/lib/orgGraph";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/card";
 import { ProvenanceBadge } from "@/components/ui/badge";
 
 export default function GraphPage() {
   const [graph, setGraph] = useState<GraphPayload | null>(null);
+  const [orgGraph, setOrgGraph] = useState<OrgGraphPayload | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800);
 
   useEffect(() => {
     api.graph().then(setGraph).catch(() => setGraph(null));
+    // The organization graph is a separate, server-scoped view; a failure
+    // (e.g. not a member of any organization) leaves it hidden, never guessed.
+    api.orgGraph().then(setOrgGraph).catch(() => setOrgGraph(null));
   }, []);
 
   useEffect(() => {
@@ -120,7 +125,93 @@ export default function GraphPage() {
           {selected && <EdgeDetail graph={graph} service={selected} />}
         </div>
       </div>
+
+      {orgGraph && <OrgAssetGraphPanel payload={orgGraph} />}
     </div>
+  );
+}
+
+/**
+ * Organization asset dependency graph (Phase 6, §5.10): a compact, read-only
+ * view of the company's registered assets and administrator-declared
+ * relationships. It reports potential exposure only — the server's disclaimer
+ * is shown verbatim, and nothing here claims a compromise.
+ */
+function OrgAssetGraphPanel({ payload }: { payload: OrgGraphPayload }) {
+  const view = useMemo(() => toOrgGraphView(payload), [payload]);
+  const [openAsset, setOpenAsset] = useState<string | null>(null);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Company Asset Dependency Graph</CardTitle>
+        <span className="text-[11px] text-ink-faint">
+          {payload.stats.assets} asset{payload.stats.assets === 1 ? "" : "s"} ·{" "}
+          {payload.stats.relationships} declared relationship
+          {payload.stats.relationships === 1 ? "" : "s"}
+        </span>
+      </CardHeader>
+      <CardBody className="space-y-3 text-xs">
+        <p className="rounded border border-white/10 bg-white/[0.04] p-2 text-[11px] text-ink-muted">
+          {payload.disclaimer}
+        </p>
+        {view.nodes.length === 0 && (
+          <p className="text-ink-faint">
+            No company assets registered yet. Register assets and declare their relationships to
+            see potential exposure paths.
+          </p>
+        )}
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+          {view.nodes.map((node) => {
+            const links = view.links.filter(
+              (l) => l.source === node.id || l.target === node.id,
+            );
+            return (
+              <button
+                key={node.id}
+                onClick={() => setOpenAsset(openAsset === node.id ? null : node.id)}
+                className={`rounded border px-3 py-2 text-left transition-colors ${
+                  openAsset === node.id
+                    ? "border-accent/50 bg-accent/5"
+                    : "border-white/10 bg-white/[0.04] hover:border-white/25"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-ink">{node.label}</span>
+                  <span className="font-mono text-[10px] text-ink-faint">
+                    crit {node.criticality}
+                    {node.critical ? " ★" : ""}
+                  </span>
+                </div>
+                <div className="mt-0.5 text-[11px] text-ink-faint">
+                  {node.asset_type} · {links.length} relationship{links.length === 1 ? "" : "s"}
+                </div>
+                {openAsset === node.id && (
+                  <ul className="mt-2 space-y-1 border-t border-white/10 pt-2">
+                    {links.length === 0 && <li className="text-ink-faint">no declared relationships</li>}
+                    {links.map((l) => (
+                      <li key={l.id} className="text-[11px] text-ink-muted">
+                        {l.source === node.id ? "→" : "←"}{" "}
+                        {l.source === node.id ? l.target : l.source}{" "}
+                        <span className="text-ink-faint">
+                          ({l.relationship_type}, exposure {l.exposure})
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        {view.nodes.length > 0 && (
+          <p className="text-[10px] text-ink-faint">
+            Provenance: nodes {payload.provenance_labels.REGISTERED_ASSET ?? "registered asset"}{" "}
+            edges {payload.provenance_labels.ADMIN_DECLARED ?? "administrator-declared"}.
+          </p>
+        )}
+      </CardBody>
+    </Card>
   );
 }
 
