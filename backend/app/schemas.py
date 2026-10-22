@@ -545,14 +545,32 @@ class PermissionAuditRequest(BaseModel):
 # Engine outputs
 # --------------------------------------------------------------------------- #
 class CorrelationResponse(BaseModel):
+    """One correlation result, explicit (Phase 3).
+
+    Everything the correlation is built from is on the record: its stable id,
+    the organization it belongs to, the exact rule version that produced it,
+    the finding ids it REFERENCES (never a copy of the findings), the company
+    assets involved, the evidence it cites, and the confidence with an
+    explicit statement of what that number means.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
+    correlation_id: str
+    org_id: str
     rule_id: str
+    rule_version: str
     title: str
+    correlation_type: str
     severity: float
     confidence: float
+    uncertainty: dict[str, Any]
     explanation: str
-    contributing_event_ids: list[str]
+    chain: list[str]
+    finding_ids: list[str]
+    asset_ids: list[str]
+    evidence: dict[str, Any]
+    evaluated_at: dt.datetime
 
 
 class RiskResponse(BaseModel):

@@ -95,7 +95,7 @@ export default function OverviewPage() {
               </p>
             )}
             {correlations.slice(0, 4).map((c) => (
-              <div key={c.rule_id} className="glass-sub rounded-lg p-3">
+              <div key={c.correlation_id} className="glass-sub rounded-lg p-3">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-ink">{c.title}</span>
                   <span className="font-mono text-xs text-accent">{c.severity.toFixed(2)}</span>

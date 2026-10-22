@@ -10,10 +10,14 @@ Two tenancy layers coexist during the CRIX-SMB migration:
   carries a non-nullable ``org_id`` written only by the normalizer (resolved
   server-side from the author's membership), plus ``asset_id``,
   ``first_seen``/``last_seen``, ``evidence`` and ``updated_at``.
-  ``connected_signals`` carries a best-effort ``org_id`` label. The remaining
-  user-scoped analysis tables (correlations, risk results, plans,
-  propagation, audit log) keep ``user_id`` only until the phase that
-  reworks them; see ``docs/SMB_MIGRATION_AUDIT.md`` §11.7.
+  ``connected_signals`` carries a best-effort ``org_id`` label.
+* **Phase 3 scope — organization-owned correlations.** ``correlations`` carries
+  a non-nullable ``org_id`` (server-resolved), the stable ``correlation_id``
+  upsert key, the rule version, the referenced ``finding_ids`` /
+  ``asset_ids``, the cited ``evidence``, the plain-language ``chain`` and the
+  ``uncertainty`` statement. The remaining user-scoped analysis tables
+  (risk results, plans, propagation, audit log) keep ``user_id`` only until
+  the phase that reworks them; see ``docs/SMB_MIGRATION_AUDIT.md`` §12.6.
 
 Curated reference tables (``provider_metadata``, ``provider_capabilities``,
 ``graph_relationships``, ``knowledge_nodes``, ``knowledge_edges``) are GLOBAL
@@ -281,19 +285,57 @@ class KnowledgeEdge(Base):
 # Engine outputs
 # --------------------------------------------------------------------------- #
 class Correlation(Base, TimestampMixin):
+    """One rule firing over a set of findings in exactly one organization.
+
+    Phase 3 makes the stored result explicit instead of an opaque line: the
+    stable ``correlation_id`` (deterministic hash of organization + rule +
+    version + contributing findings, so a re-run updates this row instead of
+    duplicating it), the organization it belongs to, the exact rule version
+    that produced it, the finding ids it REFERENCES (never copies), the company
+    asset ids involved, the evidence it cites, a plain-language chain, and the
+    confidence with its uncertainty basis.
+
+    ``finding_ids`` was ``contributing_event_ids`` before Phase 3; the column
+    was renamed, not duplicated.
+    """
+
     __tablename__ = "correlations"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    # Stable engine identity. Upsert key: re-running the pipeline on the same
+    # findings updates this row instead of appending a duplicate.
+    correlation_id: Mapped[str] = mapped_column(
+        String(32), unique=True, index=True, nullable=False
+    )
+    # Server-resolved organization. Pre-Phase-3 rows carry the empty sentinel,
+    # which matches no tenant query (fail-closed), exactly as in Phase 2.
+    org_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+        server_default="",
+    )
     user_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
     run_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     rule_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    rule_version: Mapped[str] = mapped_column(String(20), nullable=False, server_default="")
     title: Mapped[str] = mapped_column(String(200), nullable=False)
+    correlation_type: Mapped[str] = mapped_column(String(80), nullable=False, server_default="")
     severity: Mapped[float] = mapped_column(Float, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    uncertainty: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     explanation: Mapped[str] = mapped_column(Text, nullable=False)
-    contributing_event_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    chain: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    finding_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    asset_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    # When the engine produced this result (vs. created_at = when first stored).
+    evaluated_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class RiskResult(Base, TimestampMixin):

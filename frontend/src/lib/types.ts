@@ -63,13 +63,21 @@ export interface SecurityEvent {
 }
 
 export interface Correlation {
+  correlation_id: string;
+  org_id: string;
   rule_id: string;
+  rule_version: string;
   title: string;
   correlation_type: string;
   severity: number;
   confidence: number;
+  uncertainty: { basis: string; value: number; note: string };
   explanation: string;
-  contributing_event_ids: string[];
+  chain: string[];
+  finding_ids: string[];
+  asset_ids: string[];
+  evidence: Record<string, unknown>;
+  evaluated_at: string;
 }
 
 export interface RiskResult {

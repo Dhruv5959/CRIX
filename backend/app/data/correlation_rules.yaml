@@ -1,13 +1,27 @@
-# Declarative correlation rules (§5).
+# Declarative correlation rules (§5, Phase 3).
 #
 # These are DATA, not code. The engine (app/engine/correlation.py) interprets
 # them; no Python conditionals encode any specific correlation. Each rule has:
-#   rule_id, title, predicates, correlation_type, severity logic, confidence
-#   aggregation, and a human-readable explanation template.
+#   rule_id, version, title, scope, predicates, correlation_type, severity
+#   logic, confidence aggregation, an optional observation window, and a
+#   human-readable explanation template.
 #
-# Predicate fields: event_type, exposure_type (list = any-of), status (default
-# FINDING), and metadata (exact-match key/value). `match: all` requires every
-# predicate to be satisfied by >=1 event.
+# Rule fields:
+#   rule_id          stable identifier (never reused for a different claim)
+#   version          bump when the rule's meaning or thresholds change; the
+#                    correlation result records the version that produced it
+#   scope            which findings may be combined:
+#                      same_account   one account, one organization (default)
+#                      same_asset     one COMPANY asset (asset_id must be known)
+#                      linked_assets  two assets joined by an ADMIN_DECLARED
+#                                     dependency edge — CRIX never invents edges
+#   window_hours     optional: the matched findings' observation windows must
+#                    fall within this span of each other. Used only where
+#                    temporal proximity is the claim (a campaign), never as a
+#                    decorative filter.
+#
+# Predicate fields: event_type, status (default FINDING), exposure_type (list =
+# any-of), metadata (exact-match key/value), min_events (default 1).
 #
 # Severity logic (documented parameters):
 #   base                - starting severity 0..1
@@ -15,11 +29,19 @@
 #   cap                 - maximum severity after additions
 #   multiplier_rules    - contextual multipliers (fired when a predicate on
 #                         metadata matches among the contributing events)
+#
+# Explanation templates may reference {asset_id}, {account_id}, {org_id},
+# {finding_ids}, {first_seen}, {last_seen} and {window_hours}; the engine fills
+# them from the matched findings, so an explanation cites the real evidence
+# instead of a generic sentence. tests/test_correlation_org.py asserts that no
+# template uses an unknown placeholder.
 
 rules:
   - rule_id: credential_stuffing_risk
+    version: "1.0.0"
     title: "Credential Stuffing Risk"
     correlation_type: CREDENTIAL_STUFFING
+    scope: same_account
     match: all
     predicates:
       - event_type: BREACH_EXPOSURE
@@ -39,8 +61,10 @@ rules:
       independently.
 
   - rule_id: targeted_credential_theft
+    version: "1.0.0"
     title: "Targeted Credential Theft"
     correlation_type: TARGETED_PHISHING
+    scope: same_account
     match: all
     predicates:
       - event_type: PHISHING_MESSAGE_DETECTED
@@ -56,8 +80,10 @@ rules:
       attackers the context to craft convincing, targeted lures.
 
   - rule_id: cascading_recovery_risk
+    version: "1.0.0"
     title: "Cascading Recovery Risk"
     correlation_type: CASCADING_RECOVERY
+    scope: same_account
     match: all
     predicates:
       - event_type: COMPROMISED_RECOVERY_ACCOUNT
@@ -73,8 +99,10 @@ rules:
       cascade across the dependency graph.
 
   - rule_id: elevated_takeover_risk
+    version: "1.0.0"
     title: "Elevated Takeover Risk"
     correlation_type: ELEVATED_TAKEOVER
+    scope: same_account
     match: all
     predicates:
       - event_type: BREACH_EXPOSURE
@@ -93,8 +121,10 @@ rules:
       severity above either finding alone.
 
   - rule_id: mfa_ineffective_session_exposure
+    version: "1.0.0"
     title: "Critical: MFA Ineffective Due to Session Exposure"
     correlation_type: SESSION_HIJACK_EXPOSURE
+    scope: same_account
     match: all
     predicates:
       - event_type: SESSION_EXPOSURE
@@ -111,8 +141,10 @@ rules:
       (This exposure scenario is SIMULATED — no real infostealer data is used.)
 
   - rule_id: identity_reuse_blend
+    version: "1.0.0"
     title: "Reused Identity Across Breached and Safe Accounts"
     correlation_type: IDENTITY_REUSE_BLEND
+    scope: same_account
     match: all
     predicates:
       - event_type: BREACH_EXPOSURE
@@ -128,8 +160,10 @@ rules:
       three factors most associated with account compromise into one path.
 
   - rule_id: sim_swap_recovery_exposure
+    version: "1.0.0"
     title: "SIM-Swap Recovery Exposure"
     correlation_type: SIM_SWAP_EXPOSURE
+    scope: same_account
     match: all
     predicates:
       - event_type: SIM_SWAP_VULNERABLE
@@ -145,8 +179,10 @@ rules:
       be subverted by porting the phone number.
 
   - rule_id: oversharing_and_phishing
+    version: "1.0.0"
     title: "Over-Permissioned Access Plus Active Phishing"
     correlation_type: PERMISSION_PHISHING
+    scope: same_account
     match: all
     predicates:
       - event_type: RISKY_PERMISSION_GRANTED
@@ -160,3 +196,71 @@ rules:
       A third-party app holds high-sensitivity permissions while phishing
       targeting the user is also detected. If the app or user is lured, the
       granted permissions widen what is exposed.
+
+  # ------------------------------------------------------------------------ #
+  # Phase 3 rules (organization/asset-aware). Three only, each exercising one
+  # capability the organization-first model makes possible: company-asset
+  # identity, admin-declared dependency edges, and the observation window.
+  # ------------------------------------------------------------------------ #
+  - rule_id: company_asset_compound_exposure
+    version: "1.0.0"
+    title: "One Company Asset, Several Findings"
+    correlation_type: SAME_ASSET_COMPOUND
+    scope: same_asset
+    match: all
+    predicates:
+      - event_type: BREACH_EXPOSURE
+      - event_type: MFA_MISSING
+    severity:
+      base: 0.55
+      per_event: 0.05
+      cap: 0.9
+    confidence: min
+    explanation: >-
+      Two independent findings are attached to the same company asset
+      ({asset_id}): a breach exposure for its address and a missing second
+      factor. Because both describe one asset the business depends on, they
+      compound into a single asset-level exposure rather than two unrelated
+      account notes.
+
+  - rule_id: declared_dependency_exposure
+    version: "1.0.0"
+    title: "Exposure Crossing a Declared Dependency"
+    correlation_type: DECLARED_DEPENDENCY_CHAIN
+    scope: linked_assets
+    match: all
+    predicates:
+      - event_type: BREACH_EXPOSURE
+      - event_type: MFA_MISSING
+    severity:
+      base: 0.55
+      per_event: 0.05
+      cap: 0.9
+    confidence: min
+    explanation: >-
+      An admin declared that these two company assets depend on each other, and
+      now one of them ({asset_ids}) carries a breach exposure while the other
+      lacks a second factor. Because the relationship was declared by the
+      company rather than inferred from names, the exposure can travel along a
+      real integration path.
+
+  - rule_id: phishing_campaign_window
+    version: "1.0.0"
+    title: "Repeated Phishing Within 30 Days"
+    correlation_type: PHISHING_CAMPAIGN
+    scope: same_account
+    match: all
+    window_hours: 720
+    predicates:
+      - event_type: PHISHING_MESSAGE_DETECTED
+        min_events: 2
+    severity:
+      base: 0.5
+      per_event: 0.1
+      cap: 0.8
+    confidence: min
+    explanation: >-
+      Two or more likely-phishing messages reached the same account within a
+      30-day window ({first_seen} to {last_seen}). Repeated lures in a short
+      period look like a campaign against this account rather than isolated
+      noise, which is why the timing is part of the claim.

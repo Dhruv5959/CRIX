@@ -607,18 +607,17 @@ invariant, which is what the tenant-scoped phases need.
 
 ### 12.5 Not done, not claimed
 
-* No risk formula, Shapley, planner, GraphRAG or correlation change (the seed's unchanged
-  numbers are the evidence); no ML retraining; no frontend redesign; OAuth stays frozen and
-  Instagram stays absent.
+* No risk formula, Shapley, planner or GraphRAG change (the seed's unchanged numbers are the
+  evidence); no ML retraining; no frontend redesign; OAuth stays frozen and Instagram stays
+  absent. The correlation engine was reworked in **Phase 3 (§13)**, but its severity and
+  confidence formulas are unchanged.
 * No paid dependency added; no fabricated metric.
-* The Phase 3 correlation work has **not** started.
 
 ### 12.6 Deviations carried forward to Phase 3
 
-* `correlations`, `risk_results`, `attribution_results`, `remediation_actions`,
-  `remediation_plans`, `propagation_results`, `audit_log` still carry `user_id` only. Phase 3
-  is scheduled to add `org_id` to `correlations` (the one table it reworks); the rest stay
-  user-scoped until their own phase.
+* `risk_results`, `attribution_results`, `remediation_actions`, `remediation_plans`,
+  `propagation_results`, `audit_log` still carry `user_id` only. Phase 3 adds `org_id` to
+  `correlations` (§13); the rest stay user-scoped until their own phase.
 * One column-level divergence between the two schema-creation paths: `security_events.org_id`
   is `NOT NULL` in **both** (the migration adds it with `server_default ""`, backfilled to a
   real organization wherever the writer has a membership; a leftover sentinel — impossible
@@ -626,3 +625,78 @@ invariant, which is what the tenant-scoped phases need.
   **`updated_at`** cannot be added as `NOT NULL` by SQLite `ALTER`, so it is nullable in
   migrated databases while the ORM always writes it. Fresh (ORM-created) databases carry the
   full `NOT NULL` set. `connected_signals.org_id` is nullable by design (best-effort label).
+
+---
+
+## 13. Phase 3 completion record (2026-10-22)
+
+Phase 3 makes correlation **organization-owned and explicit**: rules stay declarative data,
+but every result now states exactly which findings it combined, in which organization, under
+which rule version, over which company assets, and what its confidence does and does not
+mean. It also adds the three high-value asset-aware rules that the Phase 2 identity work made
+possible.
+
+### 13.1 What changed
+
+| Area | Change |
+|---|---|
+| `app/data/correlation_rules.yaml` | Every rule gains `version` (`"1.0.0"`) and an explicit `scope`. Predicates gain `status` (default `FINDING`) and `min_events`. Three new rules added — exactly three, each exercising one Phase 3 capability: `company_asset_compound_exposure` (`scope: same_asset`), `declared_dependency_exposure` (`scope: linked_assets`), `phishing_campaign_window` (`scope: same_account`, `window_hours: 720`, justified: repeated lures in a short window are a campaign, not noise). |
+| `app/engine/correlation.py` | Grouping is by `(org_id, account_id)` / `(org_id, asset_id)` / declared `(org_id, from_asset, to_asset)` — never by account alone — so cross-tenant mixing is structurally impossible. A finding with no resolved `org_id` is **excluded (fail-closed)**. `linked_assets` rules may only use edges the pipeline read from `asset_dependencies`; CRIX never infers an edge from name similarity. `correlation_id` is `sha256(org_id\|rule_id\|rule_version\|sorted finding_ids)[:32]`. Results carry `org_id`, `rule_id`+`rule_version`, `finding_ids`, `asset_ids`, a cited `evidence` dict, a rendered `explanation` (template placeholders filled with the real values), a plain-language `chain`, `evaluated_at`, and an explicit `uncertainty` statement. Ordering is `(-severity, rule_id, correlation_id)`. **Severity and confidence formulas are byte-for-byte unchanged.** |
+| `app/engine/pipeline.py` | Resolves the run's organization server-side (fail-closed to "no correlations" if the user has none). Stamps derived graph events with that organization *without touching the graph module*. Passes the caller's org-scoped `asset_dependencies` edges to `evaluate`. Persists correlations **upserted by `correlation_id`** (a repeat run refreshes the row, never duplicates it) and removes stale rows whose findings were replaced by a re-check (a correlation is a derived view, never a copy — the findings themselves are never altered). |
+| `app/models.py` `Correlation` | Gains `correlation_id` (unique index), `org_id` (FK, NOT NULL, sentinel-backfilled), `rule_version`, `correlation_type`, `uncertainty`/`chain`/`asset_ids`/`evidence` (JSON), `evaluated_at`. Column `contributing_event_ids` **renamed** to `finding_ids` (same data). |
+| `migrations/versions/d4e5f6a7b8c9_correlation_org_scope.py` (new) | Idempotent + reversible. Adds the columns, back-fills `org_id` from the writer's membership, gives every legacy row a deterministic `correlation_id` (content hash, with a primary-key-derived fallback for old per-run duplicates so **nothing is deleted** to fit the unique index), then renames `contributing_event_ids`→`finding_ids` via a direct `RENAME COLUMN` (supported by SQLite 3.25+ and PostgreSQL; Alembic's batch `alter_column(new_name)` does not rename on SQLite — found and fixed here). |
+| `app/schemas.py` + `app/routers/analysis.py` | `CorrelationResponse` and the `/api/analysis` payload expose the full explicit result: `correlation_id`, `org_id`, `rule_version`, `finding_ids`, `asset_ids`, `evidence`, `uncertainty`, `chain`, `evaluated_at`. |
+| `frontend/src/lib/types.ts`, `CorrelationsPage.tsx`, `OverviewPage.tsx`, `KnowledgePage.tsx` | `contributing_event_ids`→`finding_ids`; keys use the stable `correlation_id`; the correlation card renders the plain-language **chain**, the company assets involved, and the uncertainty note; the rule catalog shows version + scope. |
+
+### 13.2 Verified state (every command executed)
+
+| Check | Command | Result |
+|---|---|---|
+| Backend suite | `pytest` (backend) | **291 passed** (Phase 2's 253 + 34 engine tests in `tests/test_correlation_org.py` + 1 migration test) |
+| New correlation tests | `pytest tests/test_correlation_org.py` | 37 passed |
+| Migration tests | `pytest tests/test_migrations.py` | 5 passed (incl. a new **data-preservation** test: a Phase 2-shaped `correlations` table with a legacy row is upgraded — `org_id` back-filled, `rule_version` filled, `finding_ids` renamed, 32-char `correlation_id` assigned — then downgraded, keeping the row and its findings) |
+| Dev DB rebuild | delete `crix.db`, `alembic upgrade head`, `seed_demo.py` | full cycle works; `alembic_version = d4e5f6a7b8c9`; correlations carry `org_id`, `rule_version 1.0.0`, `finding_ids`, `asset_ids`, `chain`, `evidence`, `uncertainty`, `evaluated_at`; unique index present |
+| Upsert, no duplicates | re-run `seed_demo.py` twice | correlation rows stay at **2** (stale rows from replaced findings are cleaned up, fresh ones upserted) |
+| Risk engine unchanged | seed summary | risk **61.7 (HIGH)**, Shapley error **0.0**, planner gap **0.00%** — identical to Phases 1 and 2 (a test also asserts `risk.py` never references correlations and that a firing correlation does not move the score) |
+| Frontend | `tsc --noEmit`, `vitest run`, `npm run build` | clean, **21 passed**, built in 13.1 s |
+
+New tests cover, per rule: trigger and non-trigger (asset identity required; declared edge
+required; window and `min_events` enforced); cross-organization findings sharing an account
+id or an asset id never correlate; a finding with no organization is excluded fail-closed;
+similar asset names create no relationship; password reuse is never implied without an
+explicit reuse finding; an `UNAVAILABLE` finding triggers nothing (it is neither safe nor
+compromised); repeat evaluation yields identical ids and ordering; explanations, chains and
+evidence cite the real assets/findings with no leftover `{placeholder}`; the uncertainty note
+never reads as a probability of compromise; the risk engine source never references
+correlations; and persistence upserts rather than duplicates while cleaning stale rows.
+
+### 13.3 Postgres status — honestly NOT run (unchanged from §11.6 / §12.3)
+
+The suite was never executed against a real PostgreSQL server (no Docker, no local server,
+`psycopg` therefore not installed). Claim: **"DDL verified for the PostgreSQL dialect"**, not
+"Postgres-tested". The Phase 3 migration contains a PostgreSQL `information_schema` /
+`pg_indexes` branch that is **not** executed here. The one raw statement added —
+`ALTER TABLE ... RENAME COLUMN ... TO ...` — is standard SQL supported by both SQLite 3.25+
+and PostgreSQL, but it has **not** been run against a real PostgreSQL server.
+
+### 13.4 Not done, not claimed
+
+* No risk formula, Shapley, planner, graph or GraphRAG change; no ML retraining; OAuth stays
+  frozen (flag OFF in code) and Instagram stays absent.
+* No new org-wide correlation endpoint: correlations stay on the member's own
+  `/api/analysis` payload (the Phase 2 privacy boundary — member-level data is not exposed
+  org-wide without the audited admin-view path, which is a later phase).
+* No paid dependency added; no fabricated metric. **Phase 4 has not started.**
+
+### 13.5 Deviations carried forward
+
+* `risk_results`, `attribution_results`, `remediation_actions`, `remediation_plans`,
+  `propagation_results`, `audit_log` still carry `user_id` only; each gains `org_id` in the
+  phase that reworks it.
+* `correlations.org_id` mirrors the Phase 2 pattern: `NOT NULL` with a `server_default ""`
+  sentinel on the migrated path, back-filled from the writer's membership; a leftover
+  sentinel matches no tenant query (fail-closed). Fresh ORM-created databases have the same
+  `NOT NULL` constraint.
+* A correlation computed over another member's findings is not produced: `run_analysis` loads
+  only the calling member's findings (the Phase 2 boundary), so correlations are per-member
+  within the organization. Cross-member correlation would require the admin-view audit path.

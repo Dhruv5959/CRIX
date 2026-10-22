@@ -20,8 +20,11 @@ interface KGEdge {
 }
 interface Rule {
   rule_id: string;
+  version: string;
   title: string;
   correlation_type: string;
+  scope: string;
+  window_hours: number | null;
   predicates: string[];
   explanation: string;
 }
@@ -74,7 +77,10 @@ export default function KnowledgePage() {
                 <span className="text-ink-faint">→</span>
                 <span className="text-sm text-ink">{r.title}</span>
                 <span className="ml-auto glass-chip rounded border px-1.5 py-0.5 font-mono text-[10px] text-ink-faint">
-                  {r.rule_id}
+                  {r.rule_id} v{r.version}
+                </span>
+                <span className="glass-chip rounded border px-1.5 py-0.5 font-mono text-[10px] text-ink-faint">
+                  scope: {r.scope}{r.window_hours ? ` · ${r.window_hours}h window` : ""}
                 </span>
               </div>
               <p className="mt-2 text-[11px] text-ink-faint">{r.explanation}</p>

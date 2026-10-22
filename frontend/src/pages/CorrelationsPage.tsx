@@ -29,12 +29,12 @@ export default function CorrelationsPage() {
 
       <div className="grid grid-cols-1 gap-4">
         {result.correlations.map((c) => (
-          <Card key={c.rule_id}>
+          <Card key={c.correlation_id}>
             <CardHeader>
               <div className="flex items-center gap-3">
                 <CardTitle>{c.title}</CardTitle>
                 <span className="glass-chip rounded border px-1.5 py-0.5 font-mono text-[10px] text-ink-faint">
-                  {c.rule_id}
+                  {c.rule_id} v{c.rule_version}
                 </span>
               </div>
               <div className="flex items-center gap-3">
@@ -50,11 +50,41 @@ export default function CorrelationsPage() {
             </CardHeader>
             <CardBody className="space-y-4">
               <p className="text-sm leading-relaxed text-ink-muted">{c.explanation}</p>
+
+              {c.chain?.length > 0 && (
+                <div>
+                  <div className="label-eyebrow mb-2">How this was combined</div>
+                  <ol className="space-y-1.5 border-l border-white/10 pl-3">
+                    {c.chain.map((step, i) => (
+                      <li key={i} className="text-[12px] leading-relaxed text-ink-muted">
+                        {step}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
+              {c.asset_ids?.length > 0 && (
+                <div>
+                  <div className="label-eyebrow mb-2">Company assets involved</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {c.asset_ids.map((id) => (
+                      <span
+                        key={id}
+                        className="rounded border border-white/15 bg-white/[0.06] px-2 py-0.5 font-mono text-[11px] text-ink-muted"
+                      >
+                        {id}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div>
-                <div className="label-eyebrow mb-2">Contributing events</div>
+                <div className="label-eyebrow mb-2">Contributing findings</div>
                 <div className="flex flex-wrap gap-1.5">
                   {result.events
-                    .filter((e) => c.contributing_event_ids.includes(e.event_id))
+                    .filter((e) => c.finding_ids.includes(e.event_id))
                     .map((e) => (
                       <span
                         key={e.event_id}
@@ -69,6 +99,10 @@ export default function CorrelationsPage() {
                     ))}
                 </div>
               </div>
+
+              {c.uncertainty?.note && (
+                <p className="text-[11px] leading-relaxed text-ink-faint">{c.uncertainty.note}</p>
+              )}
             </CardBody>
           </Card>
         ))}

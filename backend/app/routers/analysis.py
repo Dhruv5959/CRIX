@@ -20,24 +20,40 @@ from app.schemas import WhatIfRequest
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
 
+def _serialize_correlation(c) -> dict:
+    """One correlation result, explicit (Phase 3 §5).
+
+    The payload states every fact the result rests on: which findings it
+    combined (by id — never a copy), which company assets are involved, which
+    rule version produced it, the evidence it cites, the reasoning in plain
+    language, and what the confidence figure does and does not mean.
+    """
+    return {
+        "correlation_id": c.correlation_id,
+        "org_id": c.org_id,
+        "rule_id": c.rule_id,
+        "rule_version": c.rule_version,
+        "title": c.title,
+        "correlation_type": c.correlation_type,
+        "severity": c.severity,
+        "confidence": c.confidence,
+        "uncertainty": c.uncertainty,
+        "explanation": c.explanation,
+        "chain": c.chain,
+        "finding_ids": c.finding_ids,
+        "asset_ids": c.asset_ids,
+        "evidence": c.evidence,
+        "evaluated_at": c.evaluated_at.isoformat(),
+    }
+
+
 def _serialize(result: dict) -> dict:
     risk_breakdown = result["risk"]
     return {
         "run_id": result["run_id"],
         "generated_at": result["generated_at"].isoformat(),
         "events": [schema_to_response(e) for e in result["events"]],
-        "correlations": [
-            {
-                "rule_id": c.rule_id,
-                "title": c.title,
-                "correlation_type": c.correlation_type,
-                "severity": c.severity,
-                "confidence": c.confidence,
-                "explanation": c.explanation,
-                "contributing_event_ids": c.contributing_event_ids,
-            }
-            for c in result["correlations"]
-        ],
+        "correlations": [_serialize_correlation(c) for c in result["correlations"]],
         "risk": {
             "score": risk_breakdown.score,
             "band": risk_breakdown.band,

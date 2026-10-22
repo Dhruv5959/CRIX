@@ -43,7 +43,16 @@ def ev(event_type: str, *, severity: float = 0.6, confidence: float = 0.8,
        exposure_type=None, status: str = "FINDING", account_id: str = "acct",
        metadata: dict | None = None, source: str = "test", event_id: str | None = None,
        user_id: str = "user-1", evidence: dict | None = None,
-       source_mode=None, org_id: str | None = None):
+       source_mode=None, org_id: str | None = "org_test", asset_id: str | None = None,
+       first_seen=None, last_seen=None):
+    """Build one normalized finding.
+
+    ``org_id`` defaults to a single test organization because findings are
+    organization-owned and the correlation engine excludes findings whose
+    organization is unknown (fail-closed). Tests that model another tenant
+    pass their own ``org_id``; the normalizer still overwrites any value when
+    a finding is persisted.
+    """
     event = SecurityEventSchema(
         event_id=event_id or f"evt_{event_type}_{account_id}_{severity}_{exposure_type}",
         user_id=user_id,
@@ -57,11 +66,11 @@ def ev(event_type: str, *, severity: float = 0.6, confidence: float = 0.8,
         metadata=metadata or {},
         evidence=evidence or {},
         provenance="test",
+        org_id=org_id,
+        asset_id=asset_id,
+        first_seen=first_seen,
+        last_seen=last_seen,
     )
     if source_mode is not None:
         event = event.model_copy(update={"source_mode": source_mode})
-    if org_id is not None:
-        # Simulates a value a client tried to inject: the normalizer must
-        # overwrite it with the server-resolved organization.
-        event = event.model_copy(update={"org_id": org_id})
     return event
