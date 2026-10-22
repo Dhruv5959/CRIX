@@ -23,6 +23,7 @@ from app.routers import (
     permissions,
     propagation,
     relationships,
+    remediation,
 )
 
 settings = get_settings()
@@ -62,6 +63,7 @@ for router in (
     oauth.router,
     relationships.router,
     propagation.router,
+    remediation.router,
 ):
     app.include_router(router)
 

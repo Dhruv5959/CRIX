@@ -41,6 +41,19 @@ Legend: ✅ allowed · ⛔ `403` · 🔎 allowed **and** audit-logged · — no 
 | `GET /api/invitations` | ✅ | ⛔ | ⛔ | `401` |
 | `DELETE /api/invitations/{id}` | ✅ (audited) | ⛔ | ⛔ | `401` |
 | `POST /api/invitations/accept` | public (token-authenticated) | — | — | uses the invite token |
+| `GET /api/remediation/settings`, `GET /api/remediation/tasks`, `GET /api/remediation/tasks/{id}` | 🔎 | 🔎 | 🔎 | `401` |
+| `PATCH /api/remediation/settings` (effort budget) | ✅ (audited) | ⛔ | ⛔ | `401` |
+| `POST /api/remediation/tasks` | ✅ (audited) | ⛔ | ⛔ | `401` |
+| `PATCH /api/remediation/tasks/{id}` (assign/effort/prereqs) | ✅ (audited) | ⛔ | ⛔ | `401` |
+| `POST /api/remediation/tasks/{id}/complete` (attestation) | ✅ (audited) | ✅ (audited) | ⛔ | `401` |
+| `POST /api/remediation/tasks/{id}/verify` | ✅ (audited) | ⛔ | ⛔ | `401` |
+| `POST /api/remediation/tasks/{id}/reopen` | ✅ (audited) | ⛔ | ⛔ | `401` |
+| `POST /api/remediation/plan` | ✅ (audited) | ✅ (audited) | ⛔ | `401` |
+
+Every remediation **read** is audit-logged (`remediation.tasks_read` /
+`task_read`) too, so task state — which drives decisions — has a trail of who
+saw it. Verified in `tests/test_remediation_phase7.py` (RBAC + tenant
+isolation + lifecycle audit set).
 
 A signed-in user with **no active membership** gets `403` from every
 organization-scoped route.

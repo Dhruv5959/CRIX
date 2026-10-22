@@ -282,6 +282,29 @@ solver never loses to greedy.
 Actions mutate the same feature vector the risk engine uses, so the planner
 re-runs the real risk function.
 
+Phase 7 extensions (all additive, same engine):
+
+- **Prerequisites** — an action is selectable only once its prerequisite
+  actions are chosen; candidates whose prerequisites can never hold (the
+  prerequisite is not a candidate, or a prerequisite cycle) are reported
+  `infeasible` **with a reason**, never silently dropped. Cycle members are
+  excluded; the rest of the catalog still plans.
+- **Deterministic tie-breaks** — equal reduction-per-effort resolves on lower
+  effort, then the lexicographic action key, independent of dict order.
+- **Per-task effort overrides** — an organization may adjust an action's
+  effort; overrides are validated (positive numbers only) and feed both plans.
+- **`pack_budget(...)`** — the shared greedy-by-score/effort budget packer
+  that both Phase 7's task planner and Phase 12's evaluation baselines call,
+  so a baseline can never drift from what the product shows.
+- **Honest partial budgets** — every plan reports `unspent_budget`; greedy
+  results are labeled `approximate`, exact results
+  `proven_optimal_over_candidates` (optimal over *these* candidates under
+  *this* budget — never claimed globally).
+
+`POST /api/remediation/plan` runs this over the organization's **OPEN tasks**
+(deduplicated deterministically by action key) under the admin-set effort
+budget; the plan is computed live and never persisted.
+
 ---
 
 ## 10. GraphRAG explanation (`backend/app/engine/graphrag.py`)
@@ -314,7 +337,8 @@ free-form invention.
 | `correlations` | fired rule results per `run_id` |
 | `risk_results` | score + breakdown per `run_id` (+ Phase 4 context: `org_id`, `asset_id`, `model_version`, `criticality_adjustment`) |
 | `attribution_results` | Shapley contributions per `run_id` |
-| `remediation_actions` | action catalog |
+| `remediation_actions` | org-scoped remediation **tasks** (Phase 7: target asset/findings, effort, computed `expected_reduction`, prerequisites/dependencies, required evidence, verification method, 4-state status, assignee) |
+| `remediation_task_history` | append-only task transitions + verification attempts (method, result, model version, evidence refs) — reopening never erases it |
 | `remediation_plans` | greedy/exact plans per `run_id` |
 | `graph_relationships` | curated dependency edges |
 | `knowledge_nodes` / `knowledge_edges` | curated GraphRAG KG |
@@ -326,8 +350,22 @@ free-form invention.
 | `account_relationships` | USER_CONFIRMED edges between connected accounts |
 | `propagation_results` | persisted compromise-propagation simulations |
 
-Every user-data table carries a non-nullable `user_id` FK with `ON DELETE
-CASCADE`, so all queries are strictly scoped and no soft-deleted data leaks.
+User-data tables are strictly scoped by **their scope key**, and every query
+filters by the caller's membership — no soft-deleted or cross-tenant data
+leaks:
+
+* org-first tables (`org_assets`, `memberships`, `invitations`,
+  `asset_dependencies`, `correlations`, `security_events`, `audit_logs`) carry
+  a non-nullable `org_id` FK with `ON DELETE CASCADE`;
+* tables that existed before the org-first migration keep `org_id` **nullable**
+  so legacy user-scoped rows remain valid (`connected_signals`,
+  `risk_results`, `remediation_actions`) — the migrations backfill them from
+  the writer's membership (e.g. Phase 7 stamps each task's `org_id`), and
+  every write still resolves the organization server-side from the caller;
+* `remediation_task_history` is append-only: `action_id` cascades with the
+  task, `org_id` scopes it, and the actor is `SET NULL` on user deletion so
+  the trail outlives accounts.
+
 SQLite for dev, PostgreSQL for production (`CRIX_DATABASE_URL`).
 
 Dev/test startup runs `init_db()`, which calls `create_all` **plus** an additive

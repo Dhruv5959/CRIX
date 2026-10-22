@@ -967,3 +967,103 @@ record otherwise stands as written (true at the time).
   unrelated subsystem. Historical snapshots are never rewritten (`risk-1.0`
   and `risk-2.0` rows survive a `risk-2.1` run byte-for-byte, pinned by
   test).
+
+---
+
+## 18. Phase 7 completion record (2026-10-23)
+
+**Commit:** (see `docs/PROGRESS.md`) · **Tag:** `phase-7-done`
+**Change:** the planner's output becomes organization-owned work with an
+honest lifecycle: a **catalog-backed action model** (target asset/findings,
+effort, expected reduction *computed by the real risk model*,
+prerequisites/dependencies, required evidence, verification method), an
+**admin-set effort-budget planner** (greedy baseline + exact branch-and-bound,
+deterministic tie-breaks, infeasible/partial-budget handling, shared
+`pack_budget`), and a **four-state task lifecycle** with append-only history.
+Supersedes §4's "Planner output → `remediation_items` … MISSING" item and
+§10's "Remediation has no task lifecycle" gap. `RUN_PLAN.md` §2 is fulfilled
+as written.
+
+### 18.1 What changed
+
+| Area | Change |
+|---|---|
+| `app/engine/planner.py` | Additive Phase 7 extensions: `normalize_prerequisites` / `topological_order` (unknown prerequisite → `prerequisite_not_a_candidate` infeasible with detail; cycles → `prerequisite_cycle`, members excluded, the rest still plans), deterministic `_select_better` tie-break (ratio → effort → lexicographic key), validated per-task `efforts` override (`ValueError` on bool/≤0/non-numeric), public `expected_reduction(features, key, criticality=)` (real `risk_from_features` before/after; `KeyError` on unknown key; honest `0.0`), `pack_budget` shared by Phase 7 and Phase 12, exact seeded with the feasible greedy incumbent and labeled `proven_optimal_over_candidates`, greedy labeled `approximate`, `unspent_budget` + `infeasible` on every plan, **explicit `candidate_actions=[]` means no candidates** (only `None` falls back to the full catalog). Earlier contracts untouched (10 planner + 27 propagation tests unchanged and green). |
+| `app/models.py` | `RemediationAction` → org-scoped task model (11 new columns); new append-only `RemediationTaskHistory` (from/to, method, result, `model_version`, `evidence_refs`, detail, timestamp); `Organization.effort_budget` (default 6.0 **with `server_default`** so `create_all` DDL matches the Alembic migration). |
+| `app/schemas.py` | 10 Phase 7 schemas (create/update/verify/reopen/response/detail/history/settings/planner view). |
+| `app/routers/remediation.py` (new) + `app/main.py` | 10 operations (7 paths, verified via OpenAPI): settings GET/PATCH; tasks GET/POST/GET{id}/PATCH{id}; `complete` / `verify` / `reopen`; `POST /plan`. RBAC: reads any role (audit-logged), create/patch/verify/reopen/settings = ORG_ADMIN, complete/plan = ORG_ADMIN or MEMBER. Every query org-scoped: a foreign task id is `404`, indistinguishable from missing. |
+| `migrations/versions/a2b3c4d5e6f7_remediation_tasks.py` (new) | Guarded/idempotent, revises `f3a1c2d4e5b6`: `batch_alter_table` adds 11 columns + org_id/status indexes, creates `remediation_task_history` (+2 indexes), `organizations.effort_budget` (`server_default 6.0`), backfills each task's `org_id` from the writer's membership (status `OPEN`, method `MODELED`, reduction/completed NULL); downgrade drops exactly what upgrade added, keeping task rows. |
+| `scripts/report_planner_gap.py` (new) | Measured gap: 9 deterministic scenarios (**7 imported from `run_evaluation._scenarios()`** + 2 prerequisite cases), seeded random family (20261023), seeded prerequisite family (20261024); prints seeds, per-scenario gaps, mean/max, trap counts; exit 3 if a constructed trap does not manifest. |
+| Tests | `tests/test_remediation_phase7.py` (**31**) + `tests/test_migrations.py` (+1 Phase 7 up/down test) = **+32**. Coverage: budget packer labels; prerequisites; infeasible reporting; cycles; determinism + order independence; tie-breaks; exact vs brute force with prerequisites; exact ≤ greedy + honest unspent budget; effort override validation/plan-changing; expected reduction independently recomputed; settings; create with engine cross-check; fail-closed validation; RBAC + tenant isolation; assignment audit; complete-never-verifies + conflicts; modeled/observed verification incl. SYNTHETIC rejection; verified states never merged; failed-verify history; reopen preserves history byte-for-byte; full-lifecycle audit set; plan endpoint (budget, task map, initial risk, labels, bounds, empty). |
+| Docs | This entry; `PROGRESS.md` Phase 7 section + table row; `ARCHITECTURE.md` §9 (Phase 7 planner extensions + plan endpoint), schema table (`remediation_actions` = tasks, `remediation_task_history` added) and scope-key paragraph; `RBAC.md` matrix (+ remediation rows, read-audit note). |
+
+### 18.2 Verified state (every command executed)
+
+| Check | Command | Result |
+|---|---|---|
+| Full backend suite | `python -m pytest` (**no CLI `-q`**) | **435 passed in 111.53s, exit 0** (403 prior + 32 new) |
+| Phase 7 targeted run | `pytest tests/test_remediation_phase7.py tests/test_migrations.py tests/test_planner.py tests/test_propagation.py` | **75 passed in 34.97s, exit 0** |
+| Frontend | `tsc --noEmit` / `vitest run` / `npm run build` | exit 0 / **31 passed** / exit 0 |
+| Planner gap report | `python scripts/report_planner_gap.py` | **59 scenarios** — deterministic 9 (constructed trap gap **0.424968** manifests; `full_stack` 0.055062 also traps; `prereq_infeasible_chain` reports 1 infeasible), random seed **20261023** (40), prereq seed **20261024** (10, all 0); mean **0.033074**, max **0.436415**, 16 > 0; traps constructed 1 / observed 16; **exit 0** |
+| Diff review + secret scan | working-tree scan (9 files, 4 untracked) | **CLEAN, exit 0** — no secrets, no unrelated changes |
+| OpenAPI | import `app.main`, list paths | 7 remediation paths / **10 operations** |
+
+### 18.3 Honesty notes — what was fixed while getting to green
+
+Code, models and docs were fixed; **no test assertion was ever weakened** (no
+pre-existing test was modified in this phase at all — only new tests were
+added):
+
+1. **Router vocabulary:** task creation validates the *declaration*
+   (`MODELED`/`OBSERVED` — the column default), `/verify` validates the
+   *resulting state* (`VERIFIED_MODELED`/`VERIFIED_OBSERVED`); the router
+   initially checked both against the state vocabulary.
+2. **`assert_asset_in_org` returns `None` — it never raises.** The router now
+   raises the 404 explicitly; a returned `None` would have silently accepted
+   a foreign/unknown asset id.
+3. **DDL drift:** `effort_budget` had only a Python-side default, so
+   `create_all` DDL lacked the migration's SQL default (legacy-shape builders
+   failed `NOT NULL`). ORM now declares `server_default="6.0"` — ORM and
+   migration agree.
+4. **Shape builder:** the Phase 6 shape rebuilds `organizations` *without*
+   `effort_budget` (as `create_all` now emits it), keeping the up/down test an
+   honest before/after.
+5. **Test audit assertion:** one new test asserted `remediation.tasks_read`
+   without performing the list read — the test now performs the read it
+   asserts on (stronger, not weaker).
+
+### 18.4 Boundaries — honestly stated
+
+* **Verification vocabulary as implemented:** exactly four statuses; every
+  attempt (pass or fail) appends `VERIFICATION_ATTEMPTED` with
+  `detail.verification_method`, evidence refs, timestamp, result and
+  `model_version` (`risk-2.1` for modeled, `None` for observed — an
+  observation involves no model). A failed verification **stays `DONE`** with
+  a FAIL row; retrying keeps both rows; reopening never rewrites history.
+* **Observed evidence:** SIMULATED, FIXTURE **and USER_PROVIDED** refs are
+  rejected (`evidence_not_live` + `source_modes_seen`) — the prompt names
+  SYNTHETIC/FIXTURE; user-typed data is likewise not a live recheck. PASS
+  requires ≥1 REAL ref; a REAL `FINDING` that maps to an addressed feature is
+  a FAIL with the offending refs listed.
+* **Clicking Done is an attestation** (`COMPLETED` history row saying so),
+  never a verification; modeled verification additionally requires an explicit
+  `attested=true` (422 otherwise).
+* **The plan is computed live, never persisted**; `initial_risk` equals the
+  run's score (same features, same engine); candidates are OPEN tasks
+  deduplicated deterministically by action key, mapped back to `task_ids`;
+  non-catalog task keys are reported under `unplannable_tasks`, never silently
+  planned.
+* **Greedy stays a labeled baseline** (never optimal); exact is proven optimal
+  **only over these candidates under this budget**; the gap script's numbers
+  are measured in this repo, with seeds printed so they reproduce.
+* **PostgreSQL not run** (unchanged limitation) — unlike 6b this phase **adds
+  a table and columns**, so the claim is "DDL verified for the PostgreSQL
+  dialect" (batch operations) only; running the suite on PostgreSQL remains a
+  Phase 13 attempt/BLOCKED item.
+* No new dependency, OAuth untouched, no plaintext secrets, `.env` ignored;
+  outbox `.eml` files regenerated by test runs were deleted before the commit.
+* Pre-existing doc claim corrected (not historical rewriting): the schema
+  table's "every user-data table carries `user_id`" was already false since
+  the org-first migration — replaced with the true scope-key rule (non-null
+  `org_id` for org-first tables, nullable-with-backfill for pre-migration
+  tables).

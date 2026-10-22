@@ -674,6 +674,100 @@ class PlannerComparison(BaseModel):
     is_greedy_trap: bool
 
 
+# --------------------------------------------------------------------------- #
+# Remediation tasks (Phase 7, §9)
+# --------------------------------------------------------------------------- #
+class RemediationTaskCreate(BaseModel):
+    """Create one org-scoped remediation task from the documented catalog.
+
+    ``action_key`` must exist in the engine's ``ACTIONS`` catalog — the
+    deterministic engine stays the authority for what an action does and what
+    it addresses; effort/expected reduction are computed server-side.
+    """
+
+    action_key: str
+    target_asset_id: str | None = None
+    finding_ids: list[str] = Field(default_factory=list)
+    effort: float | None = Field(default=None, gt=0, le=100)
+    prerequisites: list[str] = Field(default_factory=list)
+    dependencies: list[str] = Field(default_factory=list)
+    required_evidence: list[str] = Field(default_factory=list)
+    verification_method: str = "MODELED"
+
+
+class RemediationTaskUpdate(BaseModel):
+    """Partial update. Status is NOT settable here: state transitions happen
+    only through the explicit complete/verify/reopen actions."""
+
+    assigned_to: str | None = None
+    effort: float | None = Field(default=None, gt=0, le=100)
+    prerequisites: list[str] | None = None
+    dependencies: list[str] | None = None
+    required_evidence: list[str] | None = None
+
+
+class RemediationTaskVerifyRequest(BaseModel):
+    """Attempt a verification. ``method`` names the path; the two verified
+    states are recorded distinctly and never merged."""
+
+    method: str  # VERIFIED_MODELED | VERIFIED_OBSERVED
+    attested: bool = False  # required for MODELED: the human attests the state
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class RemediationTaskReopenRequest(BaseModel):
+    reason: str | None = None
+
+
+class RemediationTaskHistoryResponse(BaseModel):
+    id: str
+    from_status: str | None
+    to_status: str
+    method: str
+    result: str
+    model_version: str | None
+    evidence_refs: list[str]
+    detail: dict
+    created_at: str
+
+
+class RemediationTaskResponse(BaseModel):
+    id: str
+    org_id: str | None
+    action_key: str
+    title: str
+    description: str
+    addresses: list[str]
+    effort: float
+    target_asset_id: str | None
+    finding_ids: list[str]
+    prerequisites: list[str]
+    dependencies: list[str]
+    required_evidence: list[str]
+    verification_method: str
+    status: str
+    assigned_to: str | None
+    expected_reduction: float | None
+    completed_at: str | None
+    created_at: str
+
+
+class RemediationTaskDetailResponse(RemediationTaskResponse):
+    history: list[RemediationTaskHistoryResponse]
+
+
+class RemediationSettingsRequest(BaseModel):
+    """The admin-set effort budget (documented relative units, not time)."""
+
+    effort_budget: float = Field(gt=0, le=1000)
+
+
+class RemediationSettingsResponse(BaseModel):
+    org_id: str
+    effort_budget: float
+    note: str
+
+
 class HealthResponse(BaseModel):
     status: str
     version: str

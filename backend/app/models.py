@@ -398,17 +398,104 @@ class AttributionResult(Base, TimestampMixin):
 
 
 class RemediationAction(Base, TimestampMixin):
+    """One organization-scoped remediation task (Phase 7, §9).
+
+    A task instantiates a documented catalog action (``action_key`` must exist
+    in ``app.engine.planner.ACTIONS`` — the deterministic engine stays the
+    authority for what an action does) against a specific company asset and
+    its findings. ``expected_reduction`` is COMPUTED by the real risk model
+    from the org's own feature vector at creation; it is never invented, and
+    stays NULL until a run computes it.
+
+    Task states (exactly the four documented ones; transitions are enforced by
+    the API and every transition is appended to ``remediation_task_history``):
+
+      OPEN               created, not yet claimed
+      DONE               claimed done by a human — an ATTENTICATION, not a
+                         verification: clicking Done never verifies
+      VERIFIED_MODELED   the pipeline was re-run on the user-attested state
+                         and the modeled reduction was confirmed
+      VERIFIED_OBSERVED  a LIVE provider recheck confirmed it (rejected for
+                         SYNTHETIC/FIXTURE data by construction)
+
+    The two verified states are never merged. A failed verification attempt
+    keeps the task in DONE and is recorded in the history with ``result=FAIL``.
+    Reopening returns the task to OPEN with the full history preserved.
+    """
+
     __tablename__ = "remediation_actions"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     user_id: Mapped[str | None] = mapped_column(
         String(32), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=True
     )
+    org_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True
+    )
     action_key: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     addresses_event_types: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     effort: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+
+    # --- Phase 7 task fields -------------------------------------------------
+    # The company asset this task is about (NULL = account-level task that no
+    # registered asset bound — an explicit unknown, never an invented id).
+    target_asset_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    finding_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # Action keys that must be completed before this task can be planned.
+    prerequisites: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # Free-form declared dependencies on other tasks/resources (evidence only:
+    # the planner consumes prerequisites, this is context for the human).
+    dependencies: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    required_evidence: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # The declared preferred verification path: MODELED (pipeline rerun on the
+    # attested state) or OBSERVED (live provider recheck). Either method may
+    # be attempted; the recorded attempt always names the method used.
+    verification_method: Mapped[str] = mapped_column(String(30), default="MODELED", nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="OPEN", index=True, nullable=False)
+    # The user the task is assigned to (membership user id; NULL = unassigned).
+    assigned_to: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # Modeled reduction computed by the real risk model at creation/planning.
+    expected_reduction: Mapped[float | None] = mapped_column(Float, nullable=True)
+    completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RemediationTaskHistory(Base):
+    """Append-only transition/verification history for one remediation task.
+
+    Every state change, assignment, verification attempt (pass OR fail) and
+    reopening appends one row; rows are never updated or deleted, so the audit
+    trail survives reopening and re-verification. A verification row records
+    the method, evidence references, result, model version and timestamp —
+    never a merged "verified" state.
+    """
+
+    __tablename__ = "remediation_task_history"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    action_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("remediation_actions.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    org_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    actor_user_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    from_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    to_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    # CREATED | ASSIGNED | UPDATED | COMPLETED | VERIFICATION_ATTEMPTED | REOPENED
+    method: Mapped[str] = mapped_column(String(40), nullable=False)
+    # OK | FAIL (a verification that did not confirm is FAIL, never a state)
+    result: Mapped[str] = mapped_column(String(20), default="OK", nullable=False)
+    # The risk formula version that performed a modeled verification.
+    model_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    evidence_refs: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
 
 
 class RemediationPlan(Base, TimestampMixin):
@@ -584,6 +671,12 @@ class Organization(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     slug: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
     created_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # The admin-set remediation effort budget (Phase 7, §9): the default budget
+    # the planner packs under. Effort is a documented relative unit, never
+    # wall-clock time. Settable by ORG_ADMIN only.
+    effort_budget: Mapped[float] = mapped_column(
+        Float, default=6.0, server_default="6.0", nullable=False
+    )
 
     memberships: Mapped[list["Membership"]] = relationship(
         back_populates="organization", cascade="all, delete-orphan"

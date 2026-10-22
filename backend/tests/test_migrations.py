@@ -389,3 +389,156 @@ def test_phase4_upgrade_adds_risk_context_and_preserves_snapshots(tmp_path, monk
         assert kept == (61.7,), "downgrade must not delete risk snapshots"
     finally:
         get_settings.cache_clear()
+
+
+# --------------------------------------------------------------------------- #
+# Phase 7: remediation tasks gain the task/verification model
+# --------------------------------------------------------------------------- #
+def _build_phase6_remediation_shape(db_path: Path) -> None:
+    """Leave ``remediation_actions`` exactly as Phase 6 stored it.
+
+    The initial revision materializes the *current* ORM schema via
+    ``create_all`` (which already includes the Phase 7 columns and the
+    history table), so the table is rebuilt in its pre-Phase-7 shape, the
+    history table is dropped, and the revision is stamped — making
+    ``a2b3c4d5e6f7`` the revision that actually alters them.
+    """
+    from sqlalchemy import create_engine
+
+    engine = create_engine(f"sqlite:///{db_path.as_posix()}", future=True)
+    Base.metadata.create_all(engine)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            DROP TABLE IF EXISTS remediation_task_history;
+            DROP TABLE IF EXISTS remediation_actions;
+            CREATE TABLE remediation_actions (
+                id VARCHAR(32) NOT NULL PRIMARY KEY,
+                user_id VARCHAR(32),
+                action_key VARCHAR(80) NOT NULL,
+                title VARCHAR(200) NOT NULL,
+                description TEXT NOT NULL,
+                addresses_event_types JSON NOT NULL,
+                effort FLOAT NOT NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            );
+            CREATE INDEX ix_remediation_actions_user_id ON remediation_actions (user_id);
+            CREATE INDEX ix_remediation_actions_action_key ON remediation_actions (action_key);
+
+            DROP TABLE IF EXISTS organizations;
+            CREATE TABLE organizations (
+                id VARCHAR(32) NOT NULL PRIMARY KEY,
+                name VARCHAR(200) NOT NULL,
+                slug VARCHAR(120) NOT NULL UNIQUE,
+                created_by_user_id VARCHAR(32),
+                created_at DATETIME NOT NULL
+            );
+
+            INSERT INTO users (id, email, password_hash, is_active, email_verified,
+                               totp_enabled, created_at)
+            VALUES ('user-1', 'legacy@example.com', 'x', 1, 0, 0, '2026-01-01 00:00:00');
+            INSERT INTO organizations (id, name, slug, created_by_user_id, created_at)
+            VALUES ('org-1', 'Legacy Co', 'legacy-co', 'user-1', '2026-01-01 00:00:00');
+            INSERT INTO memberships (id, org_id, user_id, role, is_active, created_at)
+            VALUES ('mem-1', 'org-1', 'user-1', 'ORG_ADMIN', 1, '2026-01-01 00:00:00');
+
+            INSERT INTO remediation_actions (id, user_id, action_key, title, description,
+                                             addresses_event_types, effort, created_at, updated_at)
+            VALUES ('task-legacy', 'user-1', 'strengthen_mfa', 'Strengthen MFA',
+                    'legacy user-scoped task', '["no_mfa", "mfa"]', 2.0,
+                    '2026-01-01 00:00:00', '2026-01-01 00:00:00');
+
+            CREATE TABLE IF NOT EXISTS alembic_version (
+                version_num VARCHAR(32) NOT NULL PRIMARY KEY
+            );
+            DELETE FROM alembic_version;
+            INSERT INTO alembic_version (version_num) VALUES ('f3a1c2d4e5b6');
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+        engine.dispose()
+
+
+def test_phase7_upgrade_adds_task_model_and_preserves_rows(tmp_path, monkeypatch):
+    """Phase 7 must add + back-fill the task model without deleting a row."""
+    db_path = tmp_path / "legacy_tasks.db"
+    monkeypatch.setenv("CRIX_DATABASE_URL", f"sqlite:///{db_path.as_posix()}")
+    get_settings.cache_clear()
+    cfg = _alembic_config(db_path)
+    try:
+        # 1. Build the database exactly as it stood at the end of Phase 6.
+        _build_phase6_remediation_shape(db_path)
+        assert "remediation_task_history" not in _tables(db_path)
+        assert _columns(db_path, "remediation_actions") == {
+            "id", "user_id", "action_key", "title", "description",
+            "addresses_event_types", "effort", "created_at", "updated_at",
+        }
+        assert "effort_budget" not in _columns(db_path, "organizations")
+
+        # 2. Run the Phase 7 revision.
+        command.upgrade(cfg, "head")
+
+        assert _columns(db_path, "remediation_actions") >= {
+            "org_id", "target_asset_id", "finding_ids", "prerequisites",
+            "dependencies", "required_evidence", "verification_method",
+            "status", "assigned_to", "expected_reduction", "completed_at",
+        }
+        assert "remediation_task_history" in _tables(db_path)
+        assert _columns(db_path, "remediation_task_history") >= {
+            "id", "action_id", "org_id", "actor_user_id", "from_status",
+            "to_status", "method", "result", "model_version", "evidence_refs",
+            "detail", "created_at",
+        }
+        assert "effort_budget" in _columns(db_path, "organizations")
+
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT user_id, action_key, effort, org_id, status, "
+                "verification_method, expected_reduction, completed_at, "
+                "finding_ids, prerequisites FROM remediation_actions "
+                "WHERE id = 'task-legacy'"
+            ).fetchone()
+            budget = conn.execute(
+                "SELECT effort_budget FROM organizations WHERE id = 'org-1'"
+            ).fetchone()
+            index_names = {
+                r[1] for r in conn.execute("PRAGMA index_list(remediation_actions)").fetchall()
+            }
+        finally:
+            conn.close()
+        assert row is not None, "the pre-Phase-7 task must survive the migration"
+        user_id, action_key, effort, org_id, status, method, reduction, completed_at, findings, prereqs = row
+        assert (user_id, action_key, effort) == ("user-1", "strengthen_mfa", 2.0)
+        assert org_id == "org-1", "org_id must be back-filled from the membership"
+        assert status == "OPEN", "legacy tasks become OPEN (never claimed, never verified)"
+        assert method == "MODELED", "honest default verification path"
+        assert reduction is None, "expected_reduction is computed later by the engine, never invented"
+        assert completed_at is None, "nothing claims a legacy task was completed"
+        assert json.loads(findings) == [] and json.loads(prereqs) == []
+        assert budget == (6.0,), "the admin-set default effort budget"
+        assert {"ix_remediation_actions_org_id", "ix_remediation_actions_status"} <= index_names
+
+        # 3. And it reverses without losing the task row.
+        command.downgrade(cfg, "f3a1c2d4e5b6")
+        assert "remediation_task_history" not in _tables(db_path)
+        assert _columns(db_path, "remediation_actions").isdisjoint(
+            {"org_id", "target_asset_id", "finding_ids", "prerequisites",
+             "dependencies", "required_evidence", "verification_method",
+             "status", "assigned_to", "expected_reduction", "completed_at"}
+        )
+        assert "effort_budget" not in _columns(db_path, "organizations")
+        conn = sqlite3.connect(db_path)
+        try:
+            kept = conn.execute(
+                "SELECT action_key, effort FROM remediation_actions WHERE id = 'task-legacy'"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert kept == ("strengthen_mfa", 2.0), "downgrade must not delete task rows"
+    finally:
+        get_settings.cache_clear()
