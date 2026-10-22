@@ -1,0 +1,382 @@
+[
+  {
+    "service_name": "Google",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "security_key",
+      "totp_app",
+      "device_prompt",
+      "sms"
+    ],
+    "recovery_methods": [
+      "phone_sms",
+      "recovery_email",
+      "backup_codes"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "Passkeys supported since 2023. SMS is still offered as 2SV/recovery.",
+    "source": "Google Account Help — 2-Step Verification & passkeys",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "GitHub",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "security_key",
+      "totp_app",
+      "sms"
+    ],
+    "recovery_methods": [
+      "recovery_codes",
+      "recovery_email"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "SMS 2FA is available only in certain regions; prefer passkey/TOTP.",
+    "source": "GitHub Docs — Configuring two-factor authentication",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Microsoft",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "security_key",
+      "totp_app",
+      "device_prompt",
+      "sms"
+    ],
+    "recovery_methods": [
+      "recovery_email",
+      "phone_sms",
+      "recovery_codes"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "Passkeys supported (Windows Hello / cross-platform). SMS usable but weaker.",
+    "source": "Microsoft Support — Passkeys & security info",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Apple",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "security_key",
+      "device_approval",
+      "sms"
+    ],
+    "recovery_methods": [
+      "trusted_device",
+      "recovery_contact",
+      "recovery_key",
+      "phone_sms"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "2FA via trusted devices; Recovery Key/Contacts strongly advised.",
+    "source": "Apple Support — Two-factor authentication for Apple Account",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Meta (Facebook)",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "totp_app",
+      "security_key",
+      "sms",
+      "whatsapp"
+    ],
+    "recovery_methods": [
+      "phone_sms",
+      "recovery_email",
+      "recovery_codes"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "Passkeys rolled out 2023-2024; SMS remains widely available.",
+    "source": "Meta Help Center — Add extra security with passkeys & 2FA",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Instagram",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "totp_app",
+      "sms",
+      "whatsapp"
+    ],
+    "recovery_methods": [
+      "phone_sms",
+      "recovery_email",
+      "recovery_codes"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "Passkey support requires an updated app; SMS 2FA still common.",
+    "source": "Instagram Help Center — Two-factor authentication & passkeys",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "X (Twitter)",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "security_key",
+      "totp_app",
+      "sms"
+    ],
+    "recovery_methods": [
+      "recovery_codes",
+      "recovery_email",
+      "phone_sms"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "SMS 2FA may be restricted to paid tiers; prefer passkey or TOTP.",
+    "source": "X Help Center — Two-factor authentication",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Amazon",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "totp_app",
+      "sms",
+      "device_approval"
+    ],
+    "recovery_methods": [
+      "phone_sms",
+      "recovery_codes"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "Passkeys supported for sign-in; SMS OTP still available.",
+    "source": "Amazon Customer Service — Passkeys & Two-Step Verification",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Dropbox",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "security_key",
+      "totp_app",
+      "sms"
+    ],
+    "recovery_methods": [
+      "recovery_codes",
+      "phone_sms"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "Passkey support added; TOTP/security key preferred over SMS.",
+    "source": "Dropbox Help Center — Two-step verification & passkeys",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "LinkedIn",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "totp_app",
+      "sms"
+    ],
+    "recovery_methods": [
+      "recovery_codes",
+      "phone_sms",
+      "recovery_email"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "Passkey support available on newer apps; SMS is weakest option.",
+    "source": "LinkedIn Help — Two-step verification & passkeys",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "PayPal",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "totp_app",
+      "security_key",
+      "sms"
+    ],
+    "recovery_methods": [
+      "phone_sms",
+      "recovery_email"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "Passkeys supported; SMS remains an option and is SIM-swap exposed.",
+    "source": "PayPal Help — Passkeys & 2-step verification",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "WhatsApp",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "sms",
+      "device_approval"
+    ],
+    "recovery_methods": [
+      "phone_sms"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "Passkey support rolled out; account is inherently phone-number bound.",
+    "source": "WhatsApp Help Center — Passkeys",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Slack",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "totp_app",
+      "saml_sso"
+    ],
+    "recovery_methods": [
+      "recovery_codes"
+    ],
+    "sms_recovery_possible": false,
+    "notes": "SMS not a native Slack 2FA method; SSO often managed by the org.",
+    "source": "Slack Help Center — Two-factor authentication & passkeys",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Discord",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "totp_app",
+      "sms"
+    ],
+    "recovery_methods": [
+      "recovery_codes",
+      "phone_sms"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "SMS 2FA is limited to some regions; TOTP/passkey preferred.",
+    "source": "Discord Support — Multi-factor authentication & passkeys",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Coinbase",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "security_key",
+      "totp_app",
+      "sms"
+    ],
+    "recovery_methods": [
+      "recovery_codes",
+      "phone_sms"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "High-value account; security key or passkey strongly preferred.",
+    "source": "Coinbase Help — Security keys, passkeys & 2FA",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Steam",
+    "supports_passkey": false,
+    "mfa_methods": [
+      "totp_app",
+      "sms",
+      "email"
+    ],
+    "recovery_methods": [
+      "recovery_codes",
+      "phone_sms",
+      "email"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "Steam Guard mobile authenticator is the strongest option; no passkey support.",
+    "source": "Steam Support — Steam Guard",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Binance",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "totp_app",
+      "sms",
+      "email"
+    ],
+    "recovery_methods": [
+      "recovery_codes",
+      "phone_sms",
+      "email"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "Passkeys supported; SMS remains and is SIM-swap exposed.",
+    "source": "Binance Support — Passkeys & two-factor authentication",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Cloudflare",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "security_key",
+      "totp_app"
+    ],
+    "recovery_methods": [
+      "recovery_codes"
+    ],
+    "sms_recovery_possible": false,
+    "notes": "SMS not offered for account 2FA; security key preferred.",
+    "source": "Cloudflare Docs — Account security & passkeys",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Proton Mail",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "totp_app",
+      "security_key"
+    ],
+    "recovery_methods": [
+      "recovery_codes",
+      "recovery_email"
+    ],
+    "sms_recovery_possible": false,
+    "notes": "Passkey support added; no SMS recovery by design.",
+    "source": "Proton Support — Two-factor authentication & passkeys",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Okta",
+    "supports_passkey": true,
+    "mfa_methods": [
+      "passkey",
+      "security_key",
+      "totp_app",
+      "push",
+      "sms"
+    ],
+    "recovery_methods": [
+      "recovery_codes",
+      "admin_reset"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "Enterprise context; available methods depend on org policy.",
+    "source": "Okta Docs — Multifactor authentication & FastPass (passkeys)",
+    "last_verified": "2026-10-08"
+  },
+  {
+    "service_name": "Reddit",
+    "supports_passkey": false,
+    "mfa_methods": [
+      "totp_app",
+      "sms"
+    ],
+    "recovery_methods": [
+      "recovery_email",
+      "phone_sms"
+    ],
+    "sms_recovery_possible": true,
+    "notes": "TOTP via authenticator app is the stronger available option.",
+    "source": "Reddit Help — Two-factor authentication",
+    "last_verified": "2026-10-08"
+  }
+]

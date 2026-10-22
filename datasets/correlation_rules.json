@@ -1,0 +1,195 @@
+[
+  {
+    "rule_id": "credential_stuffing_risk",
+    "title": "Credential Stuffing Risk",
+    "correlation_type": "CREDENTIAL_STUFFING",
+    "match": "all",
+    "predicates": [
+      {
+        "event_type": "BREACH_EXPOSURE"
+      },
+      {
+        "event_type": "PASSWORD_REUSE"
+      }
+    ],
+    "severity": {
+      "base": 0.55,
+      "per_event": 0.05,
+      "cap": 0.95,
+      "multiplier_rules": [
+        {
+          "when": {
+            "exposure_type": [
+              "PASSWORD_AND_SESSION",
+              "SESSION_ONLY"
+            ]
+          },
+          "factor": 1.25
+        }
+      ]
+    },
+    "confidence": "min",
+    "explanation": "Reused credentials were observed together with a breach exposure. Attackers who obtain one leaked password routinely replay it against other services (credential stuffing), so the two findings compound rather than sitting independently."
+  },
+  {
+    "rule_id": "targeted_credential_theft",
+    "title": "Targeted Credential Theft",
+    "correlation_type": "TARGETED_PHISHING",
+    "match": "all",
+    "predicates": [
+      {
+        "event_type": "PHISHING_MESSAGE_DETECTED"
+      },
+      {
+        "event_type": "IDENTITY_EXPOSED"
+      }
+    ],
+    "severity": {
+      "base": 0.5,
+      "per_event": 0.05,
+      "cap": 0.9
+    },
+    "confidence": "min",
+    "explanation": "A likely phishing message was detected for an account whose identity (email/service) is already publicly exposed. Exposed identities give attackers the context to craft convincing, targeted lures."
+  },
+  {
+    "rule_id": "cascading_recovery_risk",
+    "title": "Cascading Recovery Risk",
+    "correlation_type": "CASCADING_RECOVERY",
+    "match": "all",
+    "predicates": [
+      {
+        "event_type": "COMPROMISED_RECOVERY_ACCOUNT"
+      },
+      {
+        "event_type": "ACCOUNT_DEPENDENCY"
+      }
+    ],
+    "severity": {
+      "base": 0.6,
+      "per_event": 0.05,
+      "cap": 0.95
+    },
+    "confidence": "min",
+    "explanation": "A high-centrality account used as a recovery route for others shows signs of compromise. Because other accounts trust it for recovery, this can cascade across the dependency graph."
+  },
+  {
+    "rule_id": "elevated_takeover_risk",
+    "title": "Elevated Takeover Risk",
+    "correlation_type": "ELEVATED_TAKEOVER",
+    "match": "all",
+    "predicates": [
+      {
+        "event_type": "BREACH_EXPOSURE"
+      },
+      {
+        "event_type": "MFA_MISSING"
+      }
+    ],
+    "severity": {
+      "base": 0.5,
+      "per_event": 0.05,
+      "cap": 0.9,
+      "multiplier_rules": [
+        {
+          "when": {
+            "exposure_type": [
+              "PASSWORD_AND_SESSION",
+              "SESSION_ONLY"
+            ]
+          },
+          "factor": 1.2
+        }
+      ]
+    },
+    "confidence": "min",
+    "explanation": "A breached account lacks a strong second factor. With no MFA, a leaked credential alone may be sufficient to reach the account, which raises severity above either finding alone."
+  },
+  {
+    "rule_id": "mfa_ineffective_session_exposure",
+    "title": "Critical: MFA Ineffective Due to Session Exposure",
+    "correlation_type": "SESSION_HIJACK_EXPOSURE",
+    "match": "all",
+    "predicates": [
+      {
+        "event_type": "SESSION_EXPOSURE",
+        "metadata": {
+          "mfa_bypass_capable": true
+        }
+      }
+    ],
+    "severity": {
+      "base": 0.85,
+      "per_event": 0.0,
+      "cap": 1.0
+    },
+    "confidence": "min",
+    "explanation": "A stolen session cookie that we assess as MFA bypass-capable means the attacker does not need to re-authenticate. MFA protects the login step, not an already-issued session, so the second factor is ineffective here. (This exposure scenario is SIMULATED — no real infostealer data is used.)"
+  },
+  {
+    "rule_id": "identity_reuse_blend",
+    "title": "Reused Identity Across Breached and Safe Accounts",
+    "correlation_type": "IDENTITY_REUSE_BLEND",
+    "match": "all",
+    "predicates": [
+      {
+        "event_type": "BREACH_EXPOSURE"
+      },
+      {
+        "event_type": "PASSWORD_REUSE"
+      },
+      {
+        "event_type": "MFA_MISSING"
+      }
+    ],
+    "severity": {
+      "base": 0.6,
+      "per_event": 0.03,
+      "cap": 0.95
+    },
+    "confidence": "min",
+    "explanation": "A breached account that also reuses passwords and lacks MFA combines the three factors most associated with account compromise into one path."
+  },
+  {
+    "rule_id": "sim_swap_recovery_exposure",
+    "title": "SIM-Swap Recovery Exposure",
+    "correlation_type": "SIM_SWAP_EXPOSURE",
+    "match": "all",
+    "predicates": [
+      {
+        "event_type": "SIM_SWAP_VULNERABLE"
+      },
+      {
+        "event_type": "MFA_MISSING"
+      }
+    ],
+    "severity": {
+      "base": 0.5,
+      "per_event": 0.05,
+      "cap": 0.85
+    },
+    "confidence": "min",
+    "explanation": "An account relies on SMS one-time codes for recovery while no stronger second factor is present. SMS is vulnerable to SIM-swap, so recovery can be subverted by porting the phone number."
+  },
+  {
+    "rule_id": "oversharing_and_phishing",
+    "title": "Over-Permissioned Access Plus Active Phishing",
+    "correlation_type": "PERMISSION_PHISHING",
+    "match": "all",
+    "predicates": [
+      {
+        "event_type": "RISKY_PERMISSION_GRANTED"
+      },
+      {
+        "event_type": "PHISHING_MESSAGE_DETECTED"
+      }
+    ],
+    "severity": {
+      "base": 0.45,
+      "per_event": 0.05,
+      "cap": 0.85
+    },
+    "confidence": "min",
+    "explanation": "A third-party app holds high-sensitivity permissions while phishing targeting the user is also detected. If the app or user is lured, the granted permissions widen what is exposed."
+  }
+]

@@ -1,0 +1,229 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* ---------------------------------------------------------------------------
+   Glassmorphism foundation.
+   Frosted glass only reads when there is something colourful behind it to blur
+   (ui-ux-pro-max / styles.csv: "vibrant background, light source, layered
+   depth"). So the body carries a fixed set of large, soft colour fields, and a
+   single blurred layer sits behind everything as the light source.
+
+   Design decision (measured): the panes are DARK-tinted ("smoked glass"), not
+   white-tinted. A white fill over a colourful backdrop lifts the pane toward
+   the text and collapses small-text contrast — an audit of the first build
+   found 118/417 text elements below WCAG AA. A dark fill pins every pane to a
+   dark floor, so contrast no longer depends on which colour blob happens to sit
+   behind that row. The glass read is preserved by the blur, the saturation
+   boost, the 1px translucent border, and the inner top highlight.
+--------------------------------------------------------------------------- */
+body {
+  @apply bg-base-950 text-ink antialiased;
+  background-image:
+    radial-gradient(1200px 680px at 10% -12%, rgba(34, 211, 238, 0.18), transparent 55%),
+    radial-gradient(1000px 620px at 95% 4%, rgba(59, 130, 246, 0.15), transparent 58%),
+    radial-gradient(900px 700px at 82% 104%, rgba(45, 212, 191, 0.13), transparent 58%),
+    radial-gradient(760px 560px at -6% 92%, rgba(99, 102, 241, 0.16), transparent 60%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+/* Static light source. Deliberately NOT animated: a continuous animation
+   behind `backdrop-filter` forces every frosted pane in front of it to
+   re-composite each frame, which is the single most expensive thing a glass UI
+   can do — and it also made text contrast drift over time. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -20%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(closest-side, rgba(34, 211, 238, 0.28), transparent) 18% 22% / 46% 46% no-repeat,
+    radial-gradient(closest-side, rgba(56, 189, 248, 0.24), transparent) 84% 16% / 50% 50% no-repeat,
+    radial-gradient(closest-side, rgba(45, 212, 191, 0.22), transparent) 72% 84% / 48% 48% no-repeat,
+    radial-gradient(closest-side, rgba(129, 140, 248, 0.24), transparent) 10% 86% / 52% 52% no-repeat;
+  filter: blur(70px) saturate(120%);
+  opacity: 0.42;
+}
+
+/* One consistent keyboard focus treatment (skill checklist: visible focus). */
+:focus-visible {
+  outline: 2px solid theme("colors.accent.DEFAULT");
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(34, 211, 238, 0.28);
+  color: theme("colors.ink.DEFAULT");
+}
+
+/* Slim scrollbars that keep the translucent feel. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-white/10;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-white/20;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  /* Primary frosted panel. backdrop-blur-md = 12px, inside the skill's
+     recommended 10–20px band; saturate keeps the tinted colour behind the pane
+     vivid instead of washing it grey. */
+  .glass {
+    @apply rounded-2xl border border-white/10 shadow-glass backdrop-blur-md backdrop-saturate-150;
+    background-color: rgba(8, 14, 28, 0.46);
+  }
+  /* Nested surface inside a .glass card. Intentionally has NO backdrop-filter:
+     blur-on-blur is the known glassmorphism anti-pattern, costs a compositing
+     layer each, and gets lighter the more you nest. A dark fill gives the
+     recessed depth instead, and a stable contrast floor. */
+  .glass-sub {
+    @apply rounded-xl border border-white/[0.08];
+    background-color: rgba(5, 9, 18, 0.34);
+  }
+  /* Recessed well (code blocks, graph canvas). */
+  .glass-inset {
+    @apply rounded-xl border border-white/[0.08];
+    background-color: rgba(3, 6, 14, 0.5);
+  }
+  /* Small pill/tag background. Dark for the same reason as above: light chips
+     over light panes were the single worst contrast case measured (2.46:1). */
+  .glass-chip {
+    background-color: rgba(5, 9, 18, 0.38);
+  }
+  /* App chrome: sidebar, top bar, mobile drawer. */
+  .glass-chrome {
+    @apply backdrop-blur-md backdrop-saturate-150;
+    background-color: rgba(6, 10, 22, 0.62);
+  }
+  /* Legacy name: anything still asking for .panel gets the frosted look. */
+  .panel {
+    @apply rounded-2xl border border-white/10 shadow-glass backdrop-blur-md backdrop-saturate-150;
+    background-color: rgba(8, 14, 28, 0.46);
+  }
+  .panel-pad {
+    @apply p-5;
+  }
+  /* Opt-in only: clickable cards lift. Static cards stay flat so the page does
+     not shimmer while the user reads. */
+  .panel-interactive {
+    @apply transition duration-200 hover:-translate-y-0.5 hover:border-white/25 hover:shadow-glass-hover;
+    /* hover lightens the tint rather than whitening the fill */
+    transition-property: transform, border-color, box-shadow, background-color;
+  }
+  .panel-interactive:hover {
+    background-color: rgba(12, 20, 38, 0.5);
+  }
+  .kbd {
+    @apply glass-chip rounded px-1.5 py-0.5 font-mono text-xs text-ink-muted;
+  }
+  .label-eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint;
+  }
+  /* Loading skeleton; motion is suppressed under reduced-motion below. */
+  .skeleton {
+    @apply rounded bg-white/[0.06];
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.10) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    @apply animate-shimmer;
+  }
+}
+
+/* Honour the OS "reduce motion" setting: kill decorative motion, keep the app
+   fully usable. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Backdrop-filter is widely supported but not universal; when it is missing the
+   panes would look washed-out, so fall back to a more opaque fill. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass,
+  .panel {
+    background-color: rgba(9, 15, 30, 0.92);
+  }
+  .glass-chrome {
+    background-color: rgba(6, 10, 22, 0.96);
+  }
+  .glass-sub {
+    background-color: rgba(6, 11, 22, 0.85);
+  }
+}
+
+/* Windows High Contrast / forced-colors: drop the decorative blur and let the
+   OS palette own the surfaces, so panes and borders stay distinguishable. */
+@media (forced-colors: active) {
+  .glass,
+  .panel,
+  .glass-sub,
+  .glass-inset,
+  .glass-chrome,
+  .glass-chip {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: none !important;
+    border: 1px solid CanvasText;
+    background-color: Canvas;
+  }
+}
+
+/* Print / PDF export: blur and translucency composite to mud on paper, so
+   solidify every surface and remove the decorative background. */
+@media print {
+  body {
+    background: #050912 !important;
+  }
+  body::before {
+    display: none !important;
+  }
+  .glass,
+  .panel,
+  .glass-sub,
+  .glass-inset,
+  .glass-chrome,
+  .glass-chip {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: none !important;
+  }
+  .glass,
+  .panel,
+  .glass-chrome {
+    background-color: #0a1020 !important;
+  }
+  .glass-sub,
+  .glass-inset,
+  .glass-chip {
+    background-color: #060b17 !important;
+  }
+}

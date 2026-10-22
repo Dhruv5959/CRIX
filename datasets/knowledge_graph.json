@@ -1,0 +1,279 @@
+{
+  "nodes": [
+    {
+      "node_id": "aitm_phishing",
+      "node_type": "technique",
+      "label": "Adversary-in-the-Middle Phishing",
+      "description": "A reverse-proxy phishing page relays a real login, capturing the password and the session cookie, defeating one-time codes.",
+      "source": "Microsoft Threat Intelligence — AiTM phishing"
+    },
+    {
+      "node_id": "push_bombing",
+      "node_type": "technique",
+      "label": "Push Bombing (MFA Fatigue)",
+      "description": "Repeated unexpected MFA push prompts are sent until the user approves one out of annoyance or confusion.",
+      "source": "CISA — MFA fatigue / push bombing advisory"
+    },
+    {
+      "node_id": "sim_swapping",
+      "node_type": "technique",
+      "label": "SIM Swapping",
+      "description": "An attacker ports the victim's phone number to a SIM they control, intercepting SMS codes and calls.",
+      "source": "FCC — SIM swapping consumer advisory"
+    },
+    {
+      "node_id": "session_hijacking",
+      "node_type": "technique",
+      "label": "Session Hijacking",
+      "description": "Reuse of a stolen session cookie/token to act as the victim without re-authenticating; MFA does not apply to an already-issued session.",
+      "source": "OWASP — Session hijacking / session fixation"
+    },
+    {
+      "node_id": "credential_stuffing",
+      "node_type": "technique",
+      "label": "Credential Stuffing",
+      "description": "Automated replay of username/password pairs leaked from one service against other services.",
+      "source": "OWASP — Credential stuffing"
+    },
+    {
+      "node_id": "passkey",
+      "node_type": "defense",
+      "label": "Passkeys (FIDO2/WebAuthn)",
+      "description": "Phishing-resistant, origin-bound public-key credentials; no shared secret and no push prompt.",
+      "source": "FIDO Alliance — Passkeys"
+    },
+    {
+      "node_id": "security_key",
+      "node_type": "defense",
+      "label": "Hardware Security Key (FIDO2)",
+      "description": "Phishing-resistant hardware authenticator using the same origin-bound challenge as passkeys.",
+      "source": "FIDO Alliance — FIDO2 security keys"
+    },
+    {
+      "node_id": "totp_authenticator",
+      "node_type": "defense",
+      "label": "Authenticator-App TOTP",
+      "description": "Time-based one-time codes generated on-device; not SMS-dependent, but the code can be relayed by a real-time phishing proxy.",
+      "source": "NIST SP 800-63B — Authenticator assurance"
+    },
+    {
+      "node_id": "number_matching",
+      "node_type": "defense",
+      "label": "MFA Number Matching",
+      "description": "Push approvals that require entering a number shown on the login screen; reduces blind approvals.",
+      "source": "Microsoft — Number matching for Authenticator"
+    },
+    {
+      "node_id": "session_revocation",
+      "node_type": "defense",
+      "label": "Session Revocation & Short-Lived Tokens",
+      "description": "Invalidating active sessions and using short-lived tokens limits the value of a stolen session cookie.",
+      "source": "OWASP — Session management"
+    },
+    {
+      "node_id": "sms_otp",
+      "node_type": "defense",
+      "label": "SMS One-Time Codes",
+      "description": "One-time codes delivered by SMS; vulnerable to interception and SIM swapping.",
+      "source": "NIST SP 800-63B — deprecated SMS restrictions"
+    },
+    {
+      "node_id": "push_approval",
+      "node_type": "defense",
+      "label": "MFA Push Approval",
+      "description": "A simple approve/deny prompt on a registered device; susceptible to fatigue attacks when unmetered.",
+      "source": "CISA — MFA fatigue / push bombing advisory"
+    },
+    {
+      "node_id": "password_reuse",
+      "node_type": "factor",
+      "label": "Password Reuse",
+      "description": "Using the same password across services, so one leak compromises many accounts.",
+      "source": "NIST SP 800-63B — memorized secret reuse"
+    },
+    {
+      "node_id": "exposed_credentials",
+      "node_type": "factor",
+      "label": "Exposed Credentials",
+      "description": "Username/password pairs present in a known data breach.",
+      "source": "Have I Been Pwned — breach data model"
+    },
+    {
+      "node_id": "stolen_session_cookie",
+      "node_type": "factor",
+      "label": "Stolen Session Cookie",
+      "description": "A valid session token obtained via malware or an AiTM proxy.",
+      "source": "OWASP — Session hijacking"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "passkey_prevents_aitm",
+      "from_node": "passkey",
+      "to_node": "aitm_phishing",
+      "predicate": "prevents",
+      "evidence": "Passkeys are origin-bound and use a challenge-response with no shared secret, so a relay proxy cannot obtain a replayable credential.",
+      "source": "FIDO Alliance — Passkeys"
+    },
+    {
+      "edge_id": "passkey_prevents_push_bombing",
+      "from_node": "passkey",
+      "to_node": "push_bombing",
+      "predicate": "prevents",
+      "evidence": "Passkey sign-in does not send an approvable push prompt, removing the fatigueable approval step entirely.",
+      "source": "FIDO Alliance — Passkeys"
+    },
+    {
+      "edge_id": "passkey_prevents_sim_swapping",
+      "from_node": "passkey",
+      "to_node": "sim_swapping",
+      "predicate": "prevents",
+      "evidence": "Where passkeys are the accepted factor, authentication does not depend on SMS, so a ported SIM cannot be used to sign in.",
+      "source": "FIDO Alliance — Passkeys"
+    },
+    {
+      "edge_id": "security_key_prevents_aitm",
+      "from_node": "security_key",
+      "to_node": "aitm_phishing",
+      "predicate": "prevents",
+      "evidence": "FIDO2 hardware keys share the origin-bound challenge-response that defeats relay phishing.",
+      "source": "FIDO Alliance — FIDO2 security keys"
+    },
+    {
+      "edge_id": "security_key_prevents_push_bombing",
+      "from_node": "security_key",
+      "to_node": "push_bombing",
+      "predicate": "prevents",
+      "evidence": "No push prompt is involved in security-key sign-in.",
+      "source": "FIDO Alliance — FIDO2 security keys"
+    },
+    {
+      "edge_id": "security_key_prevents_sim_swapping",
+      "from_node": "security_key",
+      "to_node": "sim_swapping",
+      "predicate": "prevents",
+      "evidence": "Authentication does not rely on SMS when a hardware key is required.",
+      "source": "FIDO Alliance — FIDO2 security keys"
+    },
+    {
+      "edge_id": "totp_prevents_push_bombing",
+      "from_node": "totp_authenticator",
+      "to_node": "push_bombing",
+      "predicate": "prevents",
+      "evidence": "TOTP uses on-device generated codes, not approvable pushes, so there is no prompt to fatigue.",
+      "source": "NIST SP 800-63B — Authenticator assurance"
+    },
+    {
+      "edge_id": "totp_prevents_sim_swapping",
+      "from_node": "totp_authenticator",
+      "to_node": "sim_swapping",
+      "predicate": "prevents",
+      "evidence": "TOTP codes are generated on-device and do not transit the mobile network, so SIM porting does not yield the code.",
+      "source": "NIST SP 800-63B — Authenticator assurance"
+    },
+    {
+      "edge_id": "number_matching_prevents_push_bombing",
+      "from_node": "number_matching",
+      "to_node": "push_bombing",
+      "predicate": "prevents",
+      "evidence": "Number matching forces the user to read a value off the real login screen, defeating blind approval of repeated prompts.",
+      "source": "Microsoft — Number matching for Authenticator"
+    },
+    {
+      "edge_id": "session_revocation_prevents_session_hijacking",
+      "from_node": "session_revocation",
+      "to_node": "session_hijacking",
+      "predicate": "prevents",
+      "evidence": "Short-lived tokens and the ability to revoke sessions bound the window in which a stolen cookie is useful.",
+      "source": "OWASP — Session management"
+    },
+    {
+      "edge_id": "aitm_defeats_sms_otp",
+      "from_node": "aitm_phishing",
+      "to_node": "sms_otp",
+      "predicate": "defeats",
+      "evidence": "A relay proxy captures the SMS code in real time and replays it within the same session.",
+      "source": "Microsoft Threat Intelligence — AiTM phishing"
+    },
+    {
+      "edge_id": "aitm_defeats_totp",
+      "from_node": "aitm_phishing",
+      "to_node": "totp_authenticator",
+      "predicate": "defeats",
+      "evidence": "Real-time phishing relays a TOTP code before it expires, so an authenticator-app code is not phishing-resistant.",
+      "source": "Microsoft Threat Intelligence — AiTM phishing"
+    },
+    {
+      "edge_id": "sim_swapping_defeats_sms_otp",
+      "from_node": "sim_swapping",
+      "to_node": "sms_otp",
+      "predicate": "defeats",
+      "evidence": "Once the number is ported, all SMS codes go to the attacker's SIM.",
+      "source": "FCC — SIM swapping consumer advisory"
+    },
+    {
+      "edge_id": "push_bombing_defeats_push_approval",
+      "from_node": "push_bombing",
+      "to_node": "push_approval",
+      "predicate": "defeats",
+      "evidence": "Unmetered push prompts can be approved by a fatigued user, defeating the approval's intent.",
+      "source": "CISA — MFA fatigue / push bombing advisory"
+    },
+    {
+      "edge_id": "session_hijacking_defeats_passkey",
+      "from_node": "session_hijacking",
+      "to_node": "passkey",
+      "predicate": "defeats",
+      "evidence": "A stolen session cookie authenticates without any credential challenge, so the passkey is bypassed entirely.",
+      "source": "OWASP — Session hijacking"
+    },
+    {
+      "edge_id": "session_hijacking_defeats_totp",
+      "from_node": "session_hijacking",
+      "to_node": "totp_authenticator",
+      "predicate": "defeats",
+      "evidence": "Phishing the credential or reusing a stolen session avoids the TOTP step altogether.",
+      "source": "OWASP — Session hijacking"
+    },
+    {
+      "edge_id": "aitm_enables_session_hijacking",
+      "from_node": "aitm_phishing",
+      "to_node": "session_hijacking",
+      "predicate": "enables",
+      "evidence": "The relay proxy captures the session cookie at login, which is then reusable.",
+      "source": "Microsoft Threat Intelligence — AiTM phishing"
+    },
+    {
+      "edge_id": "aitm_enables_stolen_cookie",
+      "from_node": "aitm_phishing",
+      "to_node": "stolen_session_cookie",
+      "predicate": "enables",
+      "evidence": "Capturing the post-authentication cookie yields a valid session token.",
+      "source": "Microsoft Threat Intelligence — AiTM phishing"
+    },
+    {
+      "edge_id": "stolen_cookie_enables_session_hijacking",
+      "from_node": "stolen_session_cookie",
+      "to_node": "session_hijacking",
+      "predicate": "enables",
+      "evidence": "A valid session token is sufficient to act as the victim until it expires or is revoked.",
+      "source": "OWASP — Session hijacking"
+    },
+    {
+      "edge_id": "password_reuse_enables_credential_stuffing",
+      "from_node": "password_reuse",
+      "to_node": "credential_stuffing",
+      "predicate": "enables",
+      "evidence": "Reused passwords let a leak from one service be replayed successfully against others.",
+      "source": "OWASP — Credential stuffing"
+    },
+    {
+      "edge_id": "exposed_credentials_enables_credential_stuffing",
+      "from_node": "exposed_credentials",
+      "to_node": "credential_stuffing",
+      "predicate": "enables",
+      "evidence": "Breached username/password pairs are the raw input to credential-stuffing tooling.",
+      "source": "OWASP — Credential stuffing"
+    }
+  ]
+}

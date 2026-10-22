@@ -1,0 +1,224 @@
+{
+  "permissions": [
+    {
+      "match": "profile",
+      "category": "profile",
+      "sensitivity": "low",
+      "rationale": "Basic profile details (name, avatar) are broadly public; low sensitivity."
+    },
+    {
+      "match": "user:email",
+      "category": "profile",
+      "sensitivity": "low",
+      "rationale": "The account's own email address; low sensitivity but useful for phishing."
+    },
+    {
+      "match": "openid",
+      "category": "identity",
+      "sensitivity": "low",
+      "rationale": "Federated identity assertion; no user data beyond an identifier."
+    },
+    {
+      "match": "contacts",
+      "category": "contacts",
+      "sensitivity": "high",
+      "rationale": "Access to the full contact list enables large-scale spear-phishing from a trusted sender."
+    },
+    {
+      "match": "contacts.read",
+      "category": "contacts",
+      "sensitivity": "high",
+      "rationale": "Read access to contacts still enables targeting the victim's network."
+    },
+    {
+      "match": "address_book",
+      "category": "contacts",
+      "sensitivity": "high",
+      "rationale": "Address-book access exposes the victim's personal and professional graph."
+    },
+    {
+      "match": "sms",
+      "category": "messaging",
+      "sensitivity": "high",
+      "rationale": "SMS access can read one-time codes and messages, undermining MFA and privacy."
+    },
+    {
+      "match": "read_sms",
+      "category": "messaging",
+      "sensitivity": "high",
+      "rationale": "Reading SMS exposes one-time codes, directly weakening second factors."
+    },
+    {
+      "match": "send_sms",
+      "category": "messaging",
+      "sensitivity": "high",
+      "rationale": "Sending SMS enables abuse and premium-message fraud."
+    },
+    {
+      "match": "call_log",
+      "category": "messaging",
+      "sensitivity": "medium",
+      "rationale": "Call history is sensitive personal data but less directly exploitable than SMS."
+    },
+    {
+      "match": "location",
+      "category": "location",
+      "sensitivity": "high",
+      "rationale": "Precise location enables physical targeting and pattern-of-life analysis."
+    },
+    {
+      "match": "location.always",
+      "category": "location",
+      "sensitivity": "high",
+      "rationale": "Always-on location is continuous tracking; high sensitivity."
+    },
+    {
+      "match": "geolocation",
+      "category": "location",
+      "sensitivity": "high",
+      "rationale": "Geolocation reveals precise whereabouts; high sensitivity."
+    },
+    {
+      "match": "files",
+      "category": "files",
+      "sensitivity": "high",
+      "rationale": "Broad file access can expose documents, keys, and credentials stored on disk."
+    },
+    {
+      "match": "drive",
+      "category": "files",
+      "sensitivity": "high",
+      "rationale": "Cloud drive access can expose or delete a large volume of data."
+    },
+    {
+      "match": "drive.readonly",
+      "category": "files",
+      "sensitivity": "medium",
+      "rationale": "Read-only drive access can still exfiltrate sensitive documents."
+    },
+    {
+      "match": "camera",
+      "category": "device",
+      "sensitivity": "medium",
+      "rationale": "Camera access is sensitive but scoped to what the app captures."
+    },
+    {
+      "match": "microphone",
+      "category": "device",
+      "sensitivity": "medium",
+      "rationale": "Microphone access can capture ambient audio and conversations."
+    },
+    {
+      "match": "calendar",
+      "category": "other",
+      "sensitivity": "medium",
+      "rationale": "Calendar data reveals schedules and can enable social-engineering attacks."
+    },
+    {
+      "match": "payments",
+      "category": "financial",
+      "sensitivity": "high",
+      "rationale": "Payment permissions can lead to unauthorized charges."
+    },
+    {
+      "match": "billing",
+      "category": "financial",
+      "sensitivity": "high",
+      "rationale": "Billing access exposes financial account details."
+    },
+    {
+      "match": "transactions",
+      "category": "financial",
+      "sensitivity": "high",
+      "rationale": "Transaction history is sensitive financial data."
+    },
+    {
+      "match": "instagram_basic",
+      "category": "profile",
+      "sensitivity": "low",
+      "rationale": "Basic Instagram profile; low sensitivity."
+    },
+    {
+      "match": "instagram_manage_messages",
+      "category": "messaging",
+      "sensitivity": "high",
+      "rationale": "Managing messages grants read/write to private conversations."
+    },
+    {
+      "match": "pages_read_engagement",
+      "category": "profile",
+      "sensitivity": "medium",
+      "rationale": "Page engagement data; moderate sensitivity, mainly reputational."
+    },
+    {
+      "match": "ads_management",
+      "category": "financial",
+      "sensitivity": "high",
+      "rationale": "Ad-account management can spend money and expose audience data."
+    },
+    {
+      "match": "repo",
+      "category": "files",
+      "sensitivity": "high",
+      "rationale": "Full repository access spans all of the user's code, including secrets."
+    },
+    {
+      "match": "repo.read",
+      "category": "files",
+      "sensitivity": "medium",
+      "rationale": "Read access to repositories can expose proprietary code and secrets."
+    },
+    {
+      "match": "gist",
+      "category": "files",
+      "sensitivity": "medium",
+      "rationale": "Gist access can expose snippets that sometimes contain credentials."
+    },
+    {
+      "match": "workflow",
+      "category": "device",
+      "sensitivity": "high",
+      "rationale": "Workflow/CI access can modify build pipelines and deploy code."
+    },
+    {
+      "match": "delete_repo",
+      "category": "files",
+      "sensitivity": "high",
+      "rationale": "Repository deletion is destructive and potentially irreversible."
+    },
+    {
+      "match": "user:follow",
+      "category": "profile",
+      "sensitivity": "low",
+      "rationale": "Following/unfollowing accounts; low sensitivity."
+    },
+    {
+      "match": "read:user",
+      "category": "profile",
+      "sensitivity": "low",
+      "rationale": "Public user profile read; low sensitivity."
+    },
+    {
+      "match": "notifications",
+      "category": "messaging",
+      "sensitivity": "low",
+      "rationale": "Notification access is low sensitivity, mostly metadata."
+    },
+    {
+      "match": "admin",
+      "category": "identity",
+      "sensitivity": "high",
+      "rationale": "Administrative scope is broad and high-impact across the account."
+    }
+  ],
+  "default": {
+    "sensitivity": "medium",
+    "category": "unknown",
+    "rationale": "Unrecognized permission. Reported as UNKNOWN-level rather than guessed; review the app's stated scope before trusting it."
+  },
+  "staleness": {
+    "stale_after_days": 365,
+    "factor": 1.25,
+    "rationale": "A high-sensitivity grant that has not been used for over a year is treated as unreviewed standing access and weighted slightly higher."
+  }
+}

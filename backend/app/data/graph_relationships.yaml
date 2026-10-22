@@ -1,0 +1,151 @@
+# Curated account dependency edges (§8). STATIC / hand-verified — NOT
+# auto-discovered. Each edge records a source reference and last_verified date.
+#
+# Meaning of an edge A -> B ("A is a recovery/OAuth route to B"): if A is
+# compromised, it can plausibly be used to reach or recover B. Weight reflects
+# how direct/strong that route is (1.0 = direct recovery/OAuth, lower = partial).
+#
+# relationship_type: recovery_email | recovery_phone | oauth_dependency |
+#                    sso_dependency | shared_recovery
+
+relationships:
+  - from_service: Google
+    to_service: GitHub
+    relationship_type: recovery_email
+    weight: 1.0
+    description: "A Google address is commonly set as the GitHub recovery email."
+    source: "GitHub Docs — account recovery email"
+    last_verified: "2026-10-08"
+  - from_service: Google
+    to_service: Instagram
+    relationship_type: recovery_email
+    weight: 1.0
+    description: "Instagram frequently uses a Google address as recovery email."
+    source: "Instagram Help — account recovery"
+    last_verified: "2026-10-08"
+  - from_service: Google
+    to_service: Dropbox
+    relationship_type: oauth_dependency
+    weight: 0.8
+    description: "Google OAuth can be used to sign in to Dropbox."
+    source: "Dropbox Help — sign in with Google"
+    last_verified: "2026-10-08"
+  - from_service: Google
+    to_service: Slack
+    relationship_type: oauth_dependency
+    weight: 0.7
+    description: "Google SSO is a common Slack sign-in path."
+    source: "Slack Help — sign in with Google"
+    last_verified: "2026-10-08"
+  - from_service: Google
+    to_service: Coinbase
+    relationship_type: recovery_email
+    weight: 0.9
+    description: "A Google address can be configured as Coinbase recovery email."
+    source: "Coinbase Help — account recovery"
+    last_verified: "2026-10-08"
+  - from_service: GitHub
+    to_service: Google
+    relationship_type: oauth_dependency
+    weight: 0.6
+    description: "GitHub OAuth apps commonly hold Google-scoped access (reverse path)."
+    source: "GitHub Docs — OAuth apps"
+    last_verified: "2026-10-08"
+  - from_service: Microsoft
+    to_service: GitHub
+    relationship_type: oauth_dependency
+    weight: 0.8
+    description: "Microsoft account is a common GitHub sign-in and recovery identity."
+    source: "GitHub Docs — sign in with Microsoft"
+    last_verified: "2026-10-08"
+  - from_service: Microsoft
+    to_service: LinkedIn
+    relationship_type: oauth_dependency
+    weight: 0.7
+    description: "Microsoft OAuth can sign in to LinkedIn."
+    source: "LinkedIn Help — sign in with Microsoft"
+    last_verified: "2026-10-08"
+  - from_service: Microsoft
+    to_service: Dropbox
+    relationship_type: oauth_dependency
+    weight: 0.6
+    description: "Microsoft account can authenticate Dropbox."
+    source: "Dropbox Help — sign in with Microsoft"
+    last_verified: "2026-10-08"
+  - from_service: Apple
+    to_service: Instagram
+    relationship_type: oauth_dependency
+    weight: 0.6
+    description: "Sign in with Apple is offered by Instagram."
+    source: "Instagram Help — sign in with Apple"
+    last_verified: "2026-10-08"
+  - from_service: Apple
+    to_service: Dropbox
+    relationship_type: oauth_dependency
+    weight: 0.5
+    description: "Sign in with Apple available for Dropbox."
+    source: "Dropbox Help — sign in with Apple"
+    last_verified: "2026-10-08"
+  - from_service: Meta (Facebook)
+    to_service: Instagram
+    relationship_type: sso_dependency
+    weight: 1.0
+    description: "Instagram can be centrally managed via a linked Meta account."
+    source: "Meta Help — Accounts Center"
+    last_verified: "2026-10-08"
+  - from_service: Meta (Facebook)
+    to_service: WhatsApp
+    relationship_type: sso_dependency
+    weight: 0.7
+    description: "WhatsApp and Facebook accounts can be linked via Meta Accounts Center."
+    source: "Meta Help — Accounts Center"
+    last_verified: "2026-10-08"
+  - from_service: Instagram
+    to_service: Meta (Facebook)
+    relationship_type: sso_dependency
+    weight: 0.9
+    description: "Instagram and Facebook share login when centrally linked."
+    source: "Meta Help — Accounts Center"
+    last_verified: "2026-10-08"
+  - from_service: Amazon
+    to_service: PayPal
+    relationship_type: shared_recovery
+    weight: 0.4
+    description: "Same email/phone often used for payment-account recovery."
+    source: "Curated heuristic — shared identity"
+    last_verified: "2026-10-08"
+  - from_service: Google
+    to_service: PayPal
+    relationship_type: recovery_email
+    weight: 0.7
+    description: "Google address commonly set as PayPal recovery email."
+    source: "PayPal Help — account recovery"
+    last_verified: "2026-10-08"
+  - from_service: GitHub
+    to_service: Cloudflare
+    relationship_type: oauth_dependency
+    weight: 0.5
+    description: "GitHub can be used for Cloudflare account sign-in."
+    source: "Cloudflare Docs — single sign-on"
+    last_verified: "2026-10-08"
+  - from_service: Google
+    to_service: X (Twitter)
+    relationship_type: recovery_email
+    weight: 0.8
+    description: "Google address often set as X account recovery email."
+    source: "X Help — account recovery"
+    last_verified: "2026-10-08"
+  - from_service: Google
+    to_service: Reddit
+    relationship_type: recovery_email
+    weight: 0.7
+    description: "Email-based recovery for Reddit frequently a Google address."
+    source: "Reddit Help — account recovery"
+    last_verified: "2026-10-08"
+  - from_service: Proton Mail
+    to_service: GitHub
+    relationship_type: recovery_email
+    weight: 0.6
+    description: "Privacy-focused users often use Proton as the GitHub recovery address."
+    source: "GitHub Docs — account recovery email"
+    last_verified: "2026-10-08"

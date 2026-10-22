@@ -1,0 +1,156 @@
+# Curated provider capability matrix (§12 of the live-OAuth scope).
+#
+# Answers one question: does the OFFICIAL provider API actually expose this
+# piece of information? A successful OAuth connection ONLY proves an authorized
+# relationship — it never implies CRIX can read security posture.
+#
+# `available: true`  -> the official API returns this to our approved scope.
+# `available: false` -> the official API does NOT expose it to third-party apps.
+#                       CRIX marks these UNAVAILABLE_THROUGH_PROVIDER, never SAFE.
+#
+# `source` records the official documentation reference; `last_verified` when it
+# was last read by hand. Vendor capabilities change — if unsure, set false.
+
+capabilities:
+  # ------------------------------------------------------------------ Google
+  - provider: google
+    capability: Email address / basic profile
+    available: true
+    source: "Google Identity — OpenID Connect userinfo (openid, email, profile)"
+    last_verified: "2026-10-08"
+    note: "Returned by openidconnect.googleapis.com/v1/userinfo."
+
+  - provider: google
+    capability: Gmail message metadata (headers/labels, no body)
+    available: true
+    source: "Gmail API — users.messages.list/get under gmail.metadata scope"
+    last_verified: "2026-10-08"
+    note: "Metadata scope; message bodies are not requested. Used only for the documented phishing-analysis feature (gmail.readonly)."
+
+  - provider: google
+    capability: Gmail message content
+    available: true
+    source: "Gmail API — users.messages.get under gmail.readonly scope"
+    last_verified: "2026-10-08"
+    note: "Requested ONLY for message-content phishing analysis; documented requirement, not a default scope."
+
+  - provider: google
+    capability: Google Security Checkup status
+    available: false
+    source: "Google Account Security Checkup is not a third-party API"
+    last_verified: "2026-10-08"
+    note: "Not exposed to any OAuth scope. CRIX marks UNAVAILABLE_THROUGH_PROVIDER."
+
+  - provider: google
+    capability: MFA / 2-Step Verification status
+    available: false
+    source: "No public API returns Google 2SV enrollment state to third parties"
+    last_verified: "2026-10-08"
+    note: "UNAVAILABLE_THROUGH_PROVIDER. User may self-report it."
+
+  - provider: google
+    capability: Breach exposure status
+    available: false
+    source: "Google does not expose breach status via API (HIBP is the separate real source)"
+    last_verified: "2026-10-08"
+    note: "UNAVAILABLE_THROUGH_PROVIDER. Breach data comes from HIBP, not Google."
+
+  - provider: google
+    capability: Password reuse / credential state
+    available: false
+    source: "Never exposed by provider APIs"
+    last_verified: "2026-10-08"
+    note: "UNAVAILABLE_THROUGH_PROVIDER."
+
+  # ---------------------------------------------------------------- LinkedIn
+  - provider: linkedin
+    capability: Authenticated member basic profile
+    available: true
+    source: "LinkedIn OIDC — /v2/userinfo (openid, profile)"
+    last_verified: "2026-10-08"
+    note: "Establishes the LinkedIn account as a verified connected asset."
+
+  - provider: linkedin
+    capability: Member primary email
+    available: true
+    source: "LinkedIn OIDC — /v2/userinfo email claim (where permitted)"
+    last_verified: "2026-10-08"
+    note: "Only where the member has granted the email permission."
+
+  - provider: linkedin
+    capability: MFA status
+    available: false
+    source: "LinkedIn does not expose 2FA enrollment to third-party apps"
+    last_verified: "2026-10-08"
+    note: "UNAVAILABLE_THROUGH_PROVIDER. Verify manually in LinkedIn settings."
+
+  - provider: linkedin
+    capability: Security-checkup status
+    available: false
+    source: "No third-party API for LinkedIn security review"
+    last_verified: "2026-10-08"
+    note: "UNAVAILABLE_THROUGH_PROVIDER."
+
+  - provider: linkedin
+    capability: Connected-applications list
+    available: false
+    source: "Not exposed to OAuth third parties"
+    last_verified: "2026-10-08"
+    note: "UNAVAILABLE_THROUGH_PROVIDER."
+
+  - provider: linkedin
+    capability: Breach / compromise status
+    available: false
+    source: "Not exposed by LinkedIn API"
+    last_verified: "2026-10-08"
+    note: "UNAVAILABLE_THROUGH_PROVIDER."
+
+  # ------------------------------------------------- Instagram (Professional)
+  - provider: instagram
+    capability: Professional account identity (id, username, account_type)
+    available: true
+    source: "Instagram API with Instagram Login — /me fields (Professional accounts)"
+    last_verified: "2026-10-08"
+    note: "Requires a Business/Creator (Professional) account. Basic Display API is deprecated."
+
+  - provider: instagram
+    capability: Profile / media / messaging data
+    available: true
+    source: "Instagram API with Instagram Login — supported Professional endpoints"
+    last_verified: "2026-10-08"
+    note: "Only fields permitted by the current official API."
+
+  - provider: instagram
+    capability: Password / credential exposure
+    available: false
+    source: "Never exposed by any Instagram/Meta API"
+    last_verified: "2026-10-08"
+    note: "UNAVAILABLE_THROUGH_PROVIDER."
+
+  - provider: instagram
+    capability: Full MFA status
+    available: false
+    source: "Not exposed to third-party apps by Instagram/Meta"
+    last_verified: "2026-10-08"
+    note: "UNAVAILABLE_THROUGH_PROVIDER."
+
+  - provider: instagram
+    capability: Account compromise status
+    available: false
+    source: "Not exposed by Instagram/Meta"
+    last_verified: "2026-10-08"
+    note: "UNAVAILABLE_THROUGH_PROVIDER."
+
+  - provider: instagram
+    capability: Arbitrary account security settings
+    available: false
+    source: "Not exposed by the current official Instagram API"
+    last_verified: "2026-10-08"
+    note: "UNAVAILABLE_THROUGH_PROVIDER."
+
+  - provider: instagram
+    capability: Personal-account security data
+    available: false
+    source: "Design targets Professional accounts; consumer-account security APIs are not offered"
+    last_verified: "2026-10-08"
+    note: "UNAVAILABLE_THROUGH_PROVIDER. Do not design around personal consumer OAuth."
