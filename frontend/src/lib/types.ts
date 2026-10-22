@@ -116,11 +116,25 @@ export interface RiskResult {
 
 export interface Attribution {
   method: string;
+  /** True only for the exact reference computation; a seeded approximation is false. */
+  is_exact: boolean;
   total_risk: number;
   contributions: Record<string, number>;
   sum_of_contributions: number;
   efficiency_error: number;
+  /** v(full) - v(empty) - sum(contributions); sampling error for approximations. */
+  residual: number;
   compute_ms: number;
+  /** Org-scoped asset criticality that contextualized this attribution, or null. */
+  criticality_context: number | null;
+  baseline?: { v_empty: number; note: string };
+  absent_factor_note?: string;
+  clipping_note?: string;
+  breakdown?: { raising: Record<string, number>; lowering: Record<string, number>; neutral: string[] };
+  plain_language?: Record<string, string>;
+  /** Present only when method is a seeded approximation. */
+  samples?: number;
+  seed?: number;
 }
 
 export interface Plan {

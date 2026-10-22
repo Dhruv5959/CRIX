@@ -790,3 +790,57 @@ dual-engine tested only on SQLite).
 * Supersedes: the "Risk engine unchanged — 61.7" rows of §11/§12/§13. The
   formula is deliberately changed **once**, as planned; the demo number is now
   67.9 and every live doc was updated to match.
+
+---
+
+## 15. Phase 5 completion record (2026-10-22)
+
+**Commit:** (see `docs/PROGRESS.md`) · **Tag:** `phase-5-done`
+**Change:** the exact Shapley attribution engine was preserved and given a
+documented cooperative-game specification, a clearly-labelled seeded
+approximation with a measured exact-vs-approx gap, and an honest output
+contract. No new inputs and no new migration. Specification: `docs/ATTRIBUTION.md`.
+
+### 15.1 What changed
+
+| Area | Change |
+|---|---|
+| `app/engine/shapley.py` | Docstring states the game precisely (players = 12 feature groups; value function = the real `risk_from_features` restricted to a coalition; baseline `v(∅)=0`; absent factor contributes 0 and is *not* "safe"; clipping is part of `v`; residual/efficiency; criticality is context, not a player). `_make_value` factored and shared. `approximate_shapley_values` added (seeded permutation sampling; `samples>=1`; reproducible for a fixed seed). `attribute` gains `method`/`samples`/`seed` and returns `is_exact`, `residual`, `criticality_context`, `baseline`, `absent_factor_note`, `clipping_note`, `breakdown`, `plain_language`, and — only on the approximation — `samples`/`seed`. `compare_exact_vs_approximate` measures per-factor/max/mean/total error. **Correctness fix found during testing:** `is_exact` tracks the *method*, not the residual — the seeded approximation always evaluates the full coalition so its residual can be ~0 while its per-factor values are sampled. |
+| `app/schemas.py` | `AttributionResponse` gains the contract fields (all optional/defaulted, so the existing payload shape is preserved). |
+| Frontend | `types.ts` `Attribution` extended; RiskPage shows the exact-vs-approx label and the server's plain-language `residual` note. |
+| Docs | `docs/ATTRIBUTION.md` (new); `docs/PROGRESS.md` Phase 5 entry; this section. |
+
+### 15.2 Verified state (every command executed)
+
+| Check | Command | Result |
+|---|---|---|
+| Full backend suite | `python -m pytest` | **350 passed, exit 0** (327 baseline + 23 new) |
+| Shapley tests | `pytest tests/test_shapley.py tests/test_shapley_phase5.py` | 30 passed (7 pre-existing + 23 new) |
+| Frontend | `tsc --noEmit` / `vitest run` / `npm run build` | exit 0 / **21 passed** / exit 0 |
+| Demo seed | `python scripts/seed_demo.py` | risk 67.9 (HIGH), Shapley sum = total (err 0.0) |
+
+### 15.3 Postgres status — honestly NOT run (unchanged from §11.6 / §12.3 / §13.3 / §14.3)
+
+No Docker, no local server, `psycopg` not installed. Phase 5 is additive Python
+plus optional schema fields with a **new migration**; the DDL was not exercised
+on PostgreSQL here. Claim: "DDL verified for the PostgreSQL dialect" only.
+
+### 15.4 Not done, not claimed
+
+* Criticality was **not** promoted to a Shapley player — it stays value-function
+  context (documented decision, `docs/ATTRIBUTION.md` §1).
+* The seeded approximation is never used by the deterministic pipeline; it is a
+  demonstration of the exact-vs-approx gap, not a production path.
+* No new inputs, no risk-formula rewrite, no ML, no OAuth change, no paid
+  dependency, no GraphRAG behavior change.
+
+### 15.5 Deviations and findings carried forward
+
+* Bug found & fixed: `is_exact` derived from the residual would have mislabelled
+  the seeded approximation as exact (its residual can be ~0 because it always
+  evaluates the full coalition while per-factor values are sampled). It now
+  tracks the method.
+* The `plain_language` `residual` note originally contained the word "caused"
+  (in a disclaimer); reworded to avoid any causation verb so the copy never
+  claims causation even inside a negation.
+* PostgreSQL not run (§15.3); supersedes nothing in §14 (Phase 4 record stands).

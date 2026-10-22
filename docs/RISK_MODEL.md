@@ -162,9 +162,9 @@ propagation simulation, and the sensitivity range all receive the **same**
 * the sensitivity range always brackets the point estimate;
 * a what-if toggle changes controls, never which asset the run is about.
 
-(Criticality is value-function *context* here — held fixed across coalitions so
-efficiency stays exact. Whether it later becomes a Shapley *player* is a Phase 5
-decision documented in `docs/ATTRIBUTION.md`.)
+(Criticality is value-function *context* — held fixed across coalitions so
+efficiency stays exact. Phase 5 deliberately kept it as context rather than a
+Shapley *player*; that decision is documented in `docs/ATTRIBUTION.md` §1.)
 
 ## 8. Worked demo example (real, reproducible)
 

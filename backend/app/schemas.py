@@ -593,9 +593,26 @@ class RiskResponse(BaseModel):
 
 class AttributionResponse(BaseModel):
     method: str
+    # True only for the exact reference computation; a seeded approximation is
+    # labelled false so it can never silently stand in for the exact answer.
+    is_exact: bool = True
     total_risk: float
     contributions: dict[str, float]
+    # Efficiency residual: v(full) - v(empty) - sum(contributions). For exact
+    # this is numerical noise; for the approximation it is the real sampling error.
+    residual: float = 0.0
+    sum_of_contributions: float | None = None
+    efficiency_error: float | None = None
     compute_ms: float
+    criticality_context: int | None = None
+    baseline: dict[str, Any] | None = None
+    absent_factor_note: str | None = None
+    clipping_note: str | None = None
+    breakdown: dict[str, Any] | None = None
+    plain_language: dict[str, str] | None = None
+    # Present only when method is a seeded approximation.
+    samples: int | None = None
+    seed: int | None = None
 
 
 class AnalysisResult(BaseModel):

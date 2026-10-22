@@ -68,7 +68,7 @@
 | 3 | SecurityEvent normalizer | ✅ **Done** |
 | 4 | Declarative correlation engine (8 YAML rules) | ✅ **Done** |
 | 5 | Contextual risk engine (criticality × (base + interaction) − mitigation) + sensitivity range | ✅ **Done** |
-| 6 | Exact Shapley attribution + efficiency test + timing benchmark | ✅ **Done** |
+| 6 | Exact Shapley attribution + documented game spec + seeded approximation + efficiency test + timing benchmark | ✅ **Done** |
 | 7 | Account dependency graph (NetworkX, curated, centrality) | ✅ **Done** |
 | 8 | Remediation planner (greedy vs. exact branch-and-bound, greedy-trap) | ✅ **Done** |
 | 9 | What-if simulator (re-runs the real pipeline) | ✅ **Done** |
@@ -133,6 +133,8 @@ hand-entered.
 | Planner greedy traps observed | **2** | Scenarios where greedy is strictly sub-optimal (exact never worse). |
 | Shapley max efficiency error | **3.00e-09** | Σ contributions − total, exact enumeration. |
 | Shapley mean runtime | **~69 ms** | Per-evaluation timing benchmark. |
+| Demo contextual risk score | **67.9 (HIGH)** | Seed demo; base 48.5 + interaction 13.2 + criticality 6.17; Shapley sum = total (err 0.0). |
+| Attribution authority | **exact only** | Seeded approximation exists (`is_exact=false`) as a labelled teaching aid; pipeline never uses it. |
 | Correlation rules exercised | **8 / 8** | One test per rule. |
 
 ---

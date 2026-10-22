@@ -84,7 +84,8 @@ export default function RiskPage() {
           <CardHeader>
             <CardTitle>Shapley Attribution</CardTitle>
             <span className="text-[11px] text-ink-faint">
-              {attribution.method} · {formatNumber(attribution.compute_ms, 1)} ms · efficiency error{" "}
+              {attribution.method} · {attribution.is_exact ? "exact" : "approximate"} ·{" "}
+              {formatNumber(attribution.compute_ms, 1)} ms · efficiency error{" "}
               {attribution.efficiency_error.toExponential(1)}
             </span>
           </CardHeader>
@@ -121,7 +122,7 @@ export default function RiskPage() {
                 Σ = {formatNumber(attribution.sum_of_contributions, 4)} vs total{" "}
                 {formatNumber(attribution.total_risk, 4)}
               </span>
-              . Positive bars raise risk; negative bars (mitigations) lower it.
+              . {attribution.plain_language?.residual ?? ""}
             </p>
           </CardBody>
         </Card>

@@ -199,14 +199,23 @@ test covers it.
 ## 7. Exact Shapley attribution (`backend/app/engine/shapley.py`)
 
 Each feature group is a player; the characteristic function is
-`v(S) = risk_from_features(features restricted to S)` with `v(∅)=0`. Values are
-computed by **exact enumeration** over all 2ⁿ subsets (n = 12), with memoization.
-No sampling, no approximation, and no model trained on CRIX's labels.
+`v(S) = risk_from_features(features restricted to S, criticality=criticality)`
+with `v(∅)=0`. The org-scoped asset criticality is value-function **context**
+(held fixed across coalitions so efficiency stays exact), not a player.
+Authoritative values are computed by **exact enumeration** over all 2ⁿ subsets
+(n = 12), with memoization, and no model trained on CRIX's labels. Full spec in
+`docs/ATTRIBUTION.md`.
+
+A **seeded permutation-sampling approximation** also exists
+(`method="seeded_approximate_shapley"`) purely to demonstrate — and be tested
+against — the exact answer; it is labelled `is_exact=false`, records its
+seed/samples, and is never used by the deterministic pipeline.
 
 Properties tested:
 
 - **Efficiency:** `Σ φᵢ == v(full) − v(∅)` within tolerance.
 - **Null player / symmetry:** a feature that never changes the score gets 0.
+- Exact-vs-approx gap measured and reported (`compare_exact_vs_approximate`).
 - A timing benchmark is recorded.
 
 ---

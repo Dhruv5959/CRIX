@@ -11,7 +11,8 @@ executed command output, not from intent.
 | 1 org-first data model, RBAC, admin-view audit, OAuth freeze | `8bd6b3a` | — | 225 passed | ✅ |
 | 2 common finding format, stable assets, org-owned findings | `6752581` | — | 253 passed | ✅ |
 | 3 organization-owned explicit correlation results | `1886aff` | — | 291 passed | ✅ |
-| 4 contextual risk scoring (asset criticality) | (this entry) | `phase-4-done` | **327 passed** | ✅ |
+| 4 contextual risk scoring (asset criticality) | `3dc923b` | `phase-4-done` | **327 passed** | ✅ |
+| 5 Shapley risk attribution (documented game, exact + seeded approx) | (this entry) | `phase-5-done` | **350 passed** | ✅ |
 
 Frontend at every phase: `npx tsc --noEmit` (exit 0), `npx vitest run`
 (**21 passed**), `npm run build` (exit 0). PostgreSQL is honestly **not run**
@@ -122,4 +123,70 @@ reproducible.
 
 ---
 
-*(Phase 5 and Phase 6 entries appended below as those phases complete.)*
+## Phase 5 — Shapley risk attribution ✅ (`phase-5-done`)
+
+**Change:** the exact Shapley engine was preserved and given a documented
+cooperative-game specification, a clearly-labelled seeded approximation with a
+measured exact-vs-approx gap, and an honest output contract. No new inputs; the
+value function stays the real Phase 4 risk function and the org-scoped asset
+criticality stays value-function *context* (held fixed, so efficiency stays
+exact). Full specification: **`docs/ATTRIBUTION.md`** (new).
+
+### What was implemented
+
+| Area | Change |
+|---|---|
+| `app/engine/shapley.py` | Module docstring rewritten to state the game precisely (players = 12 feature groups; value function = real `risk_from_features` restricted to a coalition; baseline `v(∅)=0`; absent factor contributes 0 and is *not* "safe"; clipping is part of `v`; residual/efficiency; criticality is context not a player, with justification). Factored `_make_value` (memoized `v(mask)` shared by both methods). Added `approximate_shapley_values` (seeded permutation sampling, `samples>=1`, reproducible for a fixed seed). `attribute` gained `method`/`samples`/`seed` params and now returns `is_exact`, `residual`, `criticality_context`, `baseline`, `absent_factor_note`, `clipping_note`, `breakdown` (raising/lowering/neutral), `plain_language`, and — only on the approximation — `samples`/`seed`. Added `compare_exact_vs_approximate` measuring per-factor/max/mean/total error. **Correctness fix found during testing:** `is_exact` tracks the *method*, not the residual — the seeded approximation always evaluates the full coalition so its residual can be ~0 while its per-factor values are sampled; deriving `is_exact` from the residual would mislabel it as exact. |
+| `app/schemas.py` | `AttributionResponse` gains the new contract fields (`is_exact`, `residual`, `sum_of_contributions`, `efficiency_error`, `criticality_context`, `baseline`, notes, `breakdown`, `plain_language`, optional `samples`/`seed`) — all optional/defaulted so the existing payload shape is preserved. |
+| Frontend | `types.ts` `Attribution` extended to mirror the contract; RiskPage shows the exact-vs-approx label and surfaces the server's plain-language `residual` note (replacing a hand-written sentence). |
+| Docs | `docs/ATTRIBUTION.md` (new); this log entry; audit §15 appended. |
+
+### Verification (executed)
+
+| Check | Command | Result |
+|---|---|---|
+| Full backend suite | `python -m pytest` | **350 passed, exit 0** (327 baseline + 23 new in `tests/test_shapley_phase5.py`) |
+| Shapley tests | `pytest tests/test_shapley.py tests/test_shapley_phase5.py` | 30 passed (7 pre-existing + 23 new) |
+| Frontend | `tsc --noEmit` / `vitest run` / `npm run build` | exit 0 / **21 passed** / exit 0 |
+| Demo seed | `python scripts/seed_demo.py` | risk 67.9 (HIGH), Shapley sum = total (err 0.0) — attribution total equals the run score |
+
+### Test coverage (§4.9 → `tests/test_shapley_phase5.py`, 23 tests)
+
+Players are exactly the 12 documented feature groups · value function is the
+real risk function (total == `expected_score`, not a surrogate) · **baseline
+`v(∅)==0`** · absent factor contributes 0 · clipping bounds the attributed sum
+to ≤ 100 · efficiency residual within `1e-6` · efficiency over random inputs at
+every criticality · exact method never labelled approximate and carries no
+sampling params · compute time benchmarked · output contract exposes every
+documented field · breakdown splits raising/lowering/neutral · **plain language
+never claims causation, probability of compromise, or "safe"** · unknown method
+rejected · approximation labelled `is_exact=False` with seed/samples ·
+approximation reproducible for a fixed seed · approximation error measured vs
+exact (`compare_exact_vs_approximate`) and reported per-factor · zero samples
+rejected · approximation explains the same total as the score · criticality
+scales the total but is **not** a player · attribution total == score for the
+same criticality · pipeline attribution explains the run score with one
+criticality context · API serves the attribution contract · **cross-org
+attribution never aggregated** (each tenant explains its own score with its own
+criticality).
+
+### Deviations, findings, limitations
+
+* One real bug found & fixed during the phase: `is_exact` was derived from the
+  residual, which the seeded approximation can drive to ~0 while its per-factor
+  values are still sampled (it always evaluates the full coalition). `is_exact`
+  now tracks the method, so an approximation is never mislabelled as exact.
+* The plain-language `residual` note originally read "not what caused an
+  incident" — the word "caused" tripped the causation scan, so it was reworded
+  to avoid any causation verb entirely.
+* PostgreSQL suite **not run** (unchanged environment limitation) — Phase 5 is
+  additive in Python + optional schema fields; no new migration.
+* Criticality remains value-function context, not a promoted player (documented
+  decision in `docs/ATTRIBUTION.md` §1).
+* Outbox `.eml` files regenerated by test runs were deleted before the commit.
+* Nothing else changed: no risk-formula rewrite, no ML, no OAuth change, no
+  paid dependency, no GraphRAG behavior change.
+
+---
+
+*(Phase 6 entry appended below when that phase completes.)*

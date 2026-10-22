@@ -261,7 +261,9 @@ inspectable, non-additive structure and the attribution.
 
 **Q: Why is Shapley exact and not `shap`?**
 A: With ≤12 features, exact enumeration over 2ⁿ subsets is fast (~69 ms) and
-guarantees the efficiency property exactly. No sampling, no approximation.
+guarantees the efficiency property exactly. The authoritative path uses no
+sampling; a seeded approximation exists only as a labelled teaching aid, never
+as the authority.
 
 **Q: Is greedy optimal?**
 A: No — it's a **baseline**. The exact solver is the reference. I measure the gap
