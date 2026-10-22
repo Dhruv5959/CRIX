@@ -1,7 +1,19 @@
 """SQLAlchemy ORM models.
 
-Every table that holds user data carries a non-nullable ``user_id`` foreign key
-so all queries can be strictly scoped to the authenticated user (§13, §2 IDOR).
+Two tenancy layers coexist during the CRIX-SMB migration:
+
+* **Organization-scoped tables** (``organizations``, ``memberships``,
+  ``invitations``, ``org_assets``, ``asset_dependencies``,
+  ``admin_view_audit_log``) carry a non-nullable ``org_id``. Every query
+  against them is scoped to the caller's membership organization.
+* **Legacy user-scoped tables** (events, correlations, risk results, plans,
+  propagation, audit log, connections) still carry a non-nullable ``user_id``.
+  They receive ``org_id`` in Phase 2 together with the SecurityEvent work, so
+  that every writer is updated atomically. See ``docs/SMB_MIGRATION_AUDIT.md``.
+
+Curated reference tables (``provider_metadata``, ``provider_capabilities``,
+``graph_relationships``, ``knowledge_nodes``, ``knowledge_edges``) are GLOBAL
+reference data, not tenant data, and deliberately carry no ``org_id``.
 """
 from __future__ import annotations
 
@@ -55,6 +67,10 @@ class User(Base, TimestampMixin):
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+    memberships: Mapped[list["Membership"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -443,3 +459,165 @@ class PropagationResult(Base, TimestampMixin):
     highest_exposure: Mapped[str] = mapped_column(String(20), nullable=False, default="LOW")
     highest_risk_account_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+
+
+# --------------------------------------------------------------------------- #
+# Organizations, memberships, invitations  (org-first product; §4)
+# --------------------------------------------------------------------------- #
+class Organization(Base, TimestampMixin):
+    """A company tenant.
+
+    Every organization-scoped row in the database belongs to exactly one
+    organization. There is no personal/default organization: registration
+    creates a real organization and the registrant becomes its first
+    ``ORG_ADMIN`` (§4).
+    """
+
+    __tablename__ = "organizations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    slug: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
+    created_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    memberships: Mapped[list["Membership"]] = relationship(
+        back_populates="organization", cascade="all, delete-orphan"
+    )
+
+
+class Membership(Base, TimestampMixin):
+    """A user's role inside one organization (ORG_ADMIN | MEMBER | VIEWER).
+
+    The role is the authorization authority for every organization-scoped
+    endpoint; it is resolved server-side from the database, never trusted from
+    a client-sent claim.
+    """
+
+    __tablename__ = "memberships"
+    __table_args__ = (
+        UniqueConstraint("org_id", "user_id", name="uq_membership_org_user"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="MEMBER")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    organization: Mapped[Organization] = relationship(back_populates="memberships")
+    user: Mapped[User] = relationship(back_populates="memberships")
+
+
+class Invitation(Base):
+    """A single-use, expiring invitation to join an organization (§4).
+
+    Only the SHA-256 hash of the invitation token is stored; the raw token is
+    delivered out-of-band and is never logged.
+    """
+
+    __tablename__ = "invitations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    email: Mapped[str] = mapped_column(String(320), index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="MEMBER")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    accepted_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    invited_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
+
+
+class OrgAsset(Base, TimestampMixin):
+    """A COMPANY-OWNED asset: work email/workspace identity, code repository,
+    cloud storage, CI system, business app, or domain, plus its criticality.
+
+    Personal accounts are explicitly out of scope (§2). The API rejects any
+    attempt to register a personal-account/personal-device asset type.
+    ``criticality`` (1 = low .. 5 = business-critical) is the importance the
+    company assigns, set by an admin, and is what makes "which asset matters
+    most" answerable.
+    """
+
+    __tablename__ = "org_assets"
+    __table_args__ = (
+        UniqueConstraint("org_id", "asset_id", name="uq_org_asset_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    asset_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    asset_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    service_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # 1 (low) .. 5 (business-critical). Admin-set; never inferred from a client score.
+    criticality: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    owner_membership_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("memberships.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    source_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="USER_PROVIDED")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class AssetDependency(Base, TimestampMixin):
+    """An ADMIN_DECLARED dependency edge between two company assets (§7).
+
+    CRIX never invents relationships. Every row here is declared by an admin
+    and is labelled ``ADMIN_DECLARED`` so it is never confused with curated
+    reference edges or auto-discovered ones.
+    """
+
+    __tablename__ = "asset_dependencies"
+    __table_args__ = (
+        UniqueConstraint(
+            "org_id", "from_asset_id", "to_asset_id", "relationship_type",
+            name="uq_asset_dependency",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    from_asset_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    to_asset_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    relationship_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    edge_source: Mapped[str] = mapped_column(String(30), nullable=False, default="ADMIN_DECLARED")
+    weight: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    note: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+
+class AdminViewAuditLog(Base):
+    """Records every admin access to a member's data (§2 privacy boundary).
+
+    Each row is written when an ORG_ADMIN reads another member's member-level
+    data and is visible to that member through ``GET /api/org/admin-views``.
+    """
+
+    __tablename__ = "admin_view_audit_log"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    admin_user_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    admin_membership_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject_membership_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    subject_user_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    action: Mapped[str] = mapped_column(String(80), nullable=False)
+    resource: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )

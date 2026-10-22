@@ -131,42 +131,56 @@ def main() -> None:
     check("evaluation", client.get("/api/evaluation", headers=headers).status_code == 200)
 
     print("Live connections & propagation")
-    provs = client.get("/api/oauth/providers").json()["providers"]
-    check("oauth providers listed", set(provs) == {"google", "linkedin", "instagram"})
-    check("providers report NOT_CONFIGURED without creds",
-          all(p["status"] == "NOT_CONFIGURED" for p in provs.values()))
-    check("no client secrets in provider payload",
-          all("client_secret" not in str(p) for p in provs.values()))
+    if client.get("/api/oauth/providers").status_code == 404:
+        # OAuth is FROZEN (§1.4) — the shipped default. Assert the freeze holds,
+        # then run the propagation demo from ordinary accounts (no OAuth).
+        check("oauth frozen: providers endpoint absent", True)
+        check("oauth frozen: connections endpoint absent",
+              client.get("/api/oauth/connections", headers=headers).status_code == 404)
+        check("oauth frozen: authorize route absent",
+              client.get("/api/oauth/google/authorize", headers=headers).status_code == 404)
+        check("create second account", client.post("/api/accounts", headers=headers, json={
+            "account_id": "repo-main", "label": "Work GitHub", "service_name": "GitHub"
+        }).status_code == 201)
+        src, dst = "g-main", "repo-main"
+    else:
+        provs = client.get("/api/oauth/providers").json()["providers"]
+        check("oauth providers listed", set(provs) == {"google", "linkedin"})
+        check("instagram removed from providers", "instagram" not in provs)
+        check("providers report NOT_CONFIGURED without creds",
+              all(p["status"] == "NOT_CONFIGURED" for p in provs.values()))
+        check("no client secrets in provider payload",
+              all("client_secret" not in str(p) for p in provs.values()))
 
-    caps = client.get("/api/oauth/capabilities").json()["capabilities"]
-    check("capability matrix non-empty", len(caps) > 0)
-    unavailable = [c for c in caps if not c["available"]]
-    check("unavailable caps exist", len(unavailable) > 0)
-    check("unavailable never marked SAFE",
-          all(c["status"] == "UNAVAILABLE_THROUGH_PROVIDER" for c in unavailable),
-          str({c["status"] for c in unavailable}))
+        caps = client.get("/api/oauth/capabilities").json()["capabilities"]
+        check("capability matrix non-empty", len(caps) > 0)
+        unavailable = [c for c in caps if not c["available"]]
+        check("unavailable caps exist", len(unavailable) > 0)
+        check("unavailable never marked SAFE",
+              all(c["status"] == "UNAVAILABLE_THROUGH_PROVIDER" for c in unavailable),
+              str({c["status"] for c in unavailable}))
 
-    # Unconfigured authorize must fail loudly, not pretend.
-    check("unconfigured authorize -> 503",
-          client.get("/api/oauth/google/authorize", headers=headers).status_code == 503)
+        # Unconfigured authorize must fail loudly, not pretend.
+        check("unconfigured authorize -> 503",
+              client.get("/api/oauth/google/authorize", headers=headers).status_code == 503)
 
-    # FIXTURE connectors (clearly labeled) power the propagation demo offline.
-    fx_g = client.post("/api/oauth/fixtures/google", headers=headers)
-    check("fixture connect", fx_g.status_code == 200 and fx_g.json()["source_mode"] == "FIXTURE")
-    fx_i = client.post("/api/oauth/fixtures/instagram", headers=headers)
-    check("fixture connect 2", fx_i.status_code == 200)
-    src, dst = fx_g.json()["account_id"], fx_i.json()["account_id"]
+        # FIXTURE connectors (clearly labeled) power the propagation demo offline.
+        fx_g = client.post("/api/oauth/fixtures/google", headers=headers)
+        check("fixture connect", fx_g.status_code == 200 and fx_g.json()["source_mode"] == "FIXTURE")
+        fx_l = client.post("/api/oauth/fixtures/linkedin", headers=headers)
+        check("fixture connect 2", fx_l.status_code == 200)
+        src, dst = fx_g.json()["account_id"], fx_l.json()["account_id"]
 
-    conns = client.get("/api/oauth/connections", headers=headers).json()["connections"]
-    check("connections listed", any(c["account_id"] == src for c in conns))
-    check("connections never expose tokens",
-          "access_token_enc" not in client.get("/api/oauth/connections", headers=headers).text)
+        conns = client.get("/api/oauth/connections", headers=headers).json()["connections"]
+        check("connections listed", any(c["account_id"] == src for c in conns))
+        check("connections never expose tokens",
+              "access_token_enc" not in client.get("/api/oauth/connections", headers=headers).text)
 
-    # Connecting must NOT flip an unavailable capability to available.
-    caps_after = client.get("/api/oauth/capabilities").json()["capabilities"]
-    still_unavailable = {(c["provider"], c["capability"]) for c in caps_after if not c["available"]}
-    check("connection does not imply capability",
-          {(c["provider"], c["capability"]) for c in unavailable} == still_unavailable)
+        # Connecting must NOT flip an unavailable capability to available.
+        caps_after = client.get("/api/oauth/capabilities").json()["capabilities"]
+        still_unavailable = {(c["provider"], c["capability"]) for c in caps_after if not c["available"]}
+        check("connection does not imply capability",
+              {(c["provider"], c["capability"]) for c in unavailable} == still_unavailable)
 
     rel = client.post("/api/relationships", headers=headers, json={
         "from_account_id": src, "to_account_id": dst,

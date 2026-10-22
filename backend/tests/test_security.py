@@ -295,7 +295,11 @@ def test_env_example_parses_when_copied_verbatim(monkeypatch):
     assert settings.env == "development"
     # Unset provider credentials must stay unset, not be invented.
     assert settings.google_client_id == ""
-    assert settings.instagram_client_secret == ""
+    assert settings.linkedin_client_secret == ""
+    # OAuth is frozen: the connector flag defaults OFF, and Instagram (removed)
+    # no longer exists as a setting at all.
+    assert settings.oauth_connectors_enabled is False
+    assert not hasattr(settings, "instagram_client_secret")
 
 
 def test_cors_origins_accepts_json_array_and_csv(monkeypatch):

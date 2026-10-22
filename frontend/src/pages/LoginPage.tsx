@@ -178,8 +178,8 @@ export default function LoginPage() {
 
         <p className="mt-6 text-center text-[11px] leading-relaxed text-ink-faint">
           CRIX's own login uses bcrypt, rotating refresh tokens, and rate limiting.
-          Live Google / LinkedIn / Instagram connections happen on the Connections
-          page — tokens are encrypted at rest and never sent to this browser.
+          Live third-party connectors are disabled in this build; tokens are never
+          sent to this browser.
         </p>
       </div>
     </div>

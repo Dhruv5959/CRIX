@@ -16,6 +16,11 @@ numpy>=1.26
 scikit-learn>=1.5
 PyYAML>=6.0
 
+# PostgreSQL driver. SQLite stays the default for local dev and tests; setting
+# CRIX_DATABASE_URL to a postgresql:// URL (see docker-compose.yml) enables the
+# full-stack path. Not required to run the app.
+psycopg[binary]>=3.2
+
 # Dev / test
 pytest>=8.2
 pytest-asyncio>=0.23

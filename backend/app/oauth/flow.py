@@ -107,9 +107,6 @@ def fetch_profile(provider: str, settings: Settings, access_token: str) -> Profi
     if info is None:
         raise OAuthError(f"Unknown provider: {provider}")
     params = {"access_token": access_token}
-    # Google returns identity via standard OIDC claims; Instagram needs fields.
-    if provider == "instagram":
-        params["fields"] = "id,username,account_type,name"
     try:
         response = httpx.get(
             info.userinfo_url, params=params, timeout=_TIMEOUT, headers={"Accept": "application/json"}
@@ -145,16 +142,7 @@ def _normalize_profile(provider: str, payload: dict[str, Any]) -> Profile:
                 "picture": payload.get("picture"),
             },
         )
-    if provider == "instagram":
-        return Profile(
-            provider_account_id=str(payload.get("id") or ""),
-            identifier=payload.get("username"),
-            display_name=payload.get("name") or payload.get("username"),
-            extra={"username": payload.get("username"), "account_type": payload.get("account_type")},
-        )
     return Profile(provider_account_id="", identifier=None, display_name=None, extra={})
-
-
 def providers_payload(settings: Settings) -> dict:
     """Configuration snapshot for the UI (never includes secrets)."""
     from app.oauth.providers import configuration_state

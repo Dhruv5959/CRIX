@@ -23,11 +23,13 @@ from app.engine import normalizer, pipeline  # noqa: E402
 from app.models import (  # noqa: E402
     AccountRelationship,
     ConnectedSignal,
-    ProviderConnection,
+    Membership,
+    Organization,
     User,
 )
+from app.routers.org import unique_slug  # noqa: E402
 from app.security import hash_password  # noqa: E402
-from app.schemas import ExposureType, PasswordHygieneRequest, PasswordReuseItem, PermissionAuditRequest, PermissionEntry  # noqa: E402
+from app.schemas import ExposureType, OrgRole, PasswordHygieneRequest, PasswordReuseItem, PermissionAuditRequest, PermissionEntry  # noqa: E402
 from app.signals.password import build_hygiene_events  # noqa: E402
 from app.signals.permissions import build_permission_events  # noqa: E402
 
@@ -89,95 +91,50 @@ def _ensure_account(db, user_id: str, account_id: str, label: str, service: str,
     db.commit()
 
 
-def _ensure_fixture_connections(db, user_id: str) -> None:
-    """Clearly-labeled FIXTURE connections so the propagation demo works offline.
+def _ensure_org(db, user: User, name: str) -> Membership:
+    """Create the demo organization and make the demo user its ORG_ADMIN (§4).
 
-    source_mode is FIXTURE (never REAL): no provider API is called and no token
-    exists. Disabled automatically in production by the API layer; this seed
-    only ever runs in dev/demo environments.
+    Real registration does exactly this; the seed mirrors it so the demo user has
+    a tenant and the Admin/Member/Viewer surface is reachable. There is no
+    personal or default organization.
     """
-    fixtures = {
-        "google": ("Gmail", "gmail-demo@example.com"),
-        "linkedin": ("LinkedIn", "linkedin-demo-profile"),
-        "instagram": ("Instagram", "instagram_professional_demo"),
-    }
-    for provider, (label, identifier) in fixtures.items():
-        account_id = f"{provider}_fixture_{user_id[:8]}"
-
-        conn = db.scalar(
-            select(ProviderConnection).where(
-                ProviderConnection.user_id == user_id,
-                ProviderConnection.provider == provider,
-            )
-        )
-        if conn is None:
-            from datetime import datetime, timezone
-
-            conn = ProviderConnection(
-                user_id=user_id,
-                provider=provider,
-                provider_account_id=account_id,
-                connected_at=datetime.now(timezone.utc),
-            )
-            db.add(conn)
-        conn.identifier = identifier
-        conn.display_name = label
-        conn.connection_status = "CONNECTED"
-        conn.source_mode = "FIXTURE"
-        conn.access_token_enc = None
-        conn.refresh_token_enc = None
-        conn.scopes = "fixture"
-        conn.account_id = account_id
-        conn.last_synced_at = None
-
-        asset = db.scalar(
-            select(ConnectedSignal).where(
-                ConnectedSignal.user_id == user_id,
-                ConnectedSignal.account_id == account_id,
-            )
-        )
-        if asset is None:
-            db.add(
-                ConnectedSignal(
-                    user_id=user_id,
-                    account_id=account_id,
-                    label=label,
-                    service_name=label,
-                    platform=provider,
-                    email=identifier,
-                    source="fixture",
-                    metadata_json={
-                        "service_name": label,
-                        "source_mode": "FIXTURE",
-                        "provider": provider,
-                        "fixture": True,
-                        "oauth": False,
-                    },
-                )
-            )
-        else:
-            asset.source = "fixture"
-            asset.metadata_json = {
-                **(asset.metadata_json or {}),
-                "source_mode": "FIXTURE",
-                "fixture": True,
-            }
+    membership = db.scalar(select(Membership).where(Membership.user_id == user.id))
+    if membership is not None:
+        return membership
+    org = Organization(name=name, slug=unique_slug(db, name), created_by_user_id=user.id)
+    db.add(org)
+    db.flush()
+    membership = Membership(
+        org_id=org.id, user_id=user.id, role=OrgRole.ORG_ADMIN.value, is_active=True
+    )
+    db.add(membership)
     db.commit()
+    db.refresh(membership)
+    return membership
+
+
+def _ensure_demo_accounts(db, user_id: str) -> None:
+    """Three COMPANY work accounts for the demo, all USER_REPORTED.
+
+    OAuth connectors are frozen (§1.4): nothing here creates a
+    ``ProviderConnection`` or contacts a provider API. The accounts are labeled
+    ``user_reported`` so they are never presented as live provider data.
+    """
+    for account_id, label, service in (
+        ("google-main", "Primary Gmail", "Google"),
+        ("github-main", "Work GitHub", "GitHub"),
+        ("slack-main", "Company Slack", "Slack"),
+    ):
+        _ensure_account(db, user_id, account_id, label, service, "user_reported")
 
 
 def _ensure_demo_relationships(db, user_id: str) -> None:
     """USER_CONFIRMED edges for the propagation demo. CRIX never invents these."""
-    weights = {"recovery_email": 1.0, "sso": 0.85, "same_email_identity": 0.6}
+    weights = {"recovery_email": 1.0, "sso": 0.85}
     edges = [
-        ("google-main", "instagram-main", "recovery_email"),
-        ("google-main", "github-main", "sso"),
-        ("google-main", "linkedin_main_fixture", "same_email_identity"),
+        ("google-main", "github-main", "recovery_email"),
+        ("google-main", "slack-main", "sso"),
     ]
-    # Normalise the fixture ids to whatever this seed generated.
-    fixture_ids = {
-        provider: f"{provider}_fixture_{user_id[:8]}" for provider in ("google", "linkedin", "instagram")
-    }
-    edges[2] = ("google-main", fixture_ids["linkedin"], "same_email_identity")
 
     known = {
         row.account_id
@@ -216,6 +173,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--email", default="demo@example.com")
     parser.add_argument("--password", default="demo-password-123")
+    parser.add_argument("--org-name", default="Demo Company")
     args = parser.parse_args()
 
     init_db()
@@ -223,16 +181,13 @@ def main() -> None:
     try:
         seed_all(db)
         user = _ensure_user(db, args.email, args.password)
+        membership = _ensure_org(db, user, args.org_name)
 
-        # A Google account that is a recovery hub for many other services,
-        # with a breach + reused password + no MFA + SMS recovery + risky app.
-        _ensure_account(db, user.id, "google-main", "Primary Gmail", "Google", "user_reported")
-        _ensure_account(db, user.id, "github-main", "Work GitHub", "GitHub", "user_reported")
-        _ensure_account(db, user.id, "instagram-main", "Personal Instagram", "Instagram", "user_reported")
-
-        # Live-connection layer: FIXTURE connectors + USER_CONFIRMED edges so the
-        # Compromise Propagation demo works without real OAuth credentials.
-        _ensure_fixture_connections(db, user.id)
+        # Three COMPANY work accounts plus USER_CONFIRMED dependency edges, so the
+        # Compromise Propagation demo works with no OAuth and no provider API.
+        # A Google account that is a recovery hub for the other services, with a
+        # breach + reused password + no MFA + SMS recovery + risky app.
+        _ensure_demo_accounts(db, user.id)
         _ensure_demo_relationships(db, user.id)
 
         # Breach finding on Google (SIMULATED scenario, clearly labeled).
@@ -294,6 +249,7 @@ def main() -> None:
         result = pipeline.run_analysis(db, user.id, persist=True)
         print("=" * 60)
         print(f"Demo user: {args.email}  (password: {args.password})")
+        print(f"Role:      ORG_ADMIN of organization {membership.org_id}")
         print("=" * 60)
         print(f"Events:        {len(result['events'])}")
         print(f"Correlations:  {len(result['correlations'])}")

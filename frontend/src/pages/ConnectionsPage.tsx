@@ -37,24 +37,38 @@ export default function ConnectionsPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // Live OAuth connectors are FROZEN for CRIX-SMB (feature flag OFF in code).
+  const [connectorsEnabled, setConnectorsEnabled] = useState<boolean | null>(null);
 
   const load = useCallback(async () => {
-    const [prov, conns, caps, accs, rels, types] = await Promise.all([
-      api.oauthProviders(),
-      api.oauthConnections(),
-      api.oauthCapabilities(),
+    const [accs, rels, types] = await Promise.all([
       api.listAccounts(),
       api.listRelationships(),
       api.relationshipTypes(),
     ]);
-    setProviders(prov.providers);
-    setConnections(conns.connections);
-    setCapabilities(caps.capabilities);
-    setCapNote(caps.note);
     setAccounts(accs);
     setRelationships(rels);
     setRelTypes(types.types);
     setRelNote(types.note);
+
+    try {
+      const [prov, conns, caps] = await Promise.all([
+        api.oauthProviders(),
+        api.oauthConnections(),
+        api.oauthCapabilities(),
+      ]);
+      setProviders(prov.providers);
+      setConnections(conns.connections);
+      setCapabilities(caps.capabilities);
+      setCapNote(caps.note);
+      setConnectorsEnabled(true);
+    } catch {
+      // Connectors are disabled in this build (404) — the surface is absent.
+      setProviders({});
+      setConnections([]);
+      setCapabilities([]);
+      setConnectorsEnabled(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -119,12 +133,22 @@ export default function ConnectionsPage() {
       <header>
         <h1 className="text-2xl font-semibold text-ink">Live Account Connections</h1>
         <p className="mt-1 max-w-3xl text-sm text-ink-muted">
-          Connect accounts through official OAuth. CRIX never asks for your Google, LinkedIn, or
-          Instagram password, never stores provider credentials, and never sends OAuth tokens to the
+          Connect accounts through official OAuth. CRIX never asks for your Google or LinkedIn
+          password, never stores provider credentials, and never sends OAuth tokens to the
           browser. A connection proves an <em>authorized relationship</em> — it does not by itself
           reveal that provider's security posture.
         </p>
       </header>
+
+      {connectorsEnabled === false && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-200">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+          <span>
+            Live provider connections are disabled in this build. CRIX-SMB assesses
+            company-owned assets and user-entered data, so no third-party connector is used.
+          </span>
+        </div>
+      )}
 
       {message && (
         <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-200">

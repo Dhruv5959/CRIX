@@ -133,18 +133,6 @@
       "rationale": "Transaction history is sensitive financial data."
     },
     {
-      "match": "instagram_basic",
-      "category": "profile",
-      "sensitivity": "low",
-      "rationale": "Basic Instagram profile; low sensitivity."
-    },
-    {
-      "match": "instagram_manage_messages",
-      "category": "messaging",
-      "sensitivity": "high",
-      "rationale": "Managing messages grants read/write to private conversations."
-    },
-    {
       "match": "pages_read_engagement",
       "category": "profile",
       "sensitivity": "medium",

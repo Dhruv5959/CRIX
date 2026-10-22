@@ -22,10 +22,12 @@ from app import audit, security, totp
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.deps import get_current_user
-from app.models import PasswordResetToken, RefreshToken, User
+from app.models import Membership, PasswordResetToken, RefreshToken, User
 from app.rate_limit import client_ip, enforce, login_limiter
+from app.routers.org import create_organization
 from app.schemas import (
     LoginRequest,
+    OrgRole,
     PasswordResetConfirm,
     PasswordResetRequest,
     RegisterRequest,
@@ -121,8 +123,23 @@ def register(
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    # Organization-first: registration creates a real organization and makes the
+    # registrant its first ORG_ADMIN (§4). There is no personal org.
+    org_name = (payload.org_name or "").strip() or _default_org_name(email)
+    org = create_organization(db, name=org_name, created_by_user_id=user.id)
+    db.add(Membership(org_id=org.id, user_id=user.id, role=OrgRole.ORG_ADMIN.value, is_active=True))
+    db.commit()
+
     audit.record(db, action="register.success", user_id=user.id, ip_address=client_ip(request))
     return user
+
+
+def _default_org_name(email: str) -> str:
+    """Derive a sensible organization name when the client does not send one."""
+    domain = email.split("@", 1)[1] if "@" in email else email
+    root = domain.split(".")[0]
+    return root.replace("-", " ").replace("_", " ").title() or "My Company"
 
 
 @router.post("/login", response_model=TokenResponse)

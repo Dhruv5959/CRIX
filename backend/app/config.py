@@ -78,15 +78,20 @@ class Settings(BaseSettings):
     # quota from one client hammering the API.
     breach_check_rate_limit_per_minute: int = 10
 
-    # --- OAuth providers (live account connections) ---
-    # Leave client ids/secrets blank -> the provider reports NOT_CONFIGURED and
-    # the UI shows the connector as unavailable (never silently "safe").
+    # --- OAuth providers (live account connections) — FROZEN (§1.4) ---
+    # CRIX-SMB does NOT connect to third-party providers. The connectors stay in
+    # the codebase behind this flag, but it defaults to OFF *in code* (not just
+    # in .env): no provider app is registered, no credentials are configured,
+    # and the connector surface is absent from the UI and the demo. The reason
+    # is documented: these platforms do not expose breach, MFA, or
+    # connected-app data to third-party apps, so a connection proves nothing
+    # about security. Instagram was removed entirely (no official API for
+    # personal accounts since 2024-12-04).
+    oauth_connectors_enabled: bool = False
     google_client_id: str = ""
     google_client_secret: str = ""
     linkedin_client_id: str = ""
     linkedin_client_secret: str = ""
-    instagram_client_id: str = ""
-    instagram_client_secret: str = ""
     # Where the backend sends the browser after the OAuth callback completes.
     oauth_frontend_redirect: str = "http://localhost:5173/connections"
     # Base URL the provider redirects back to; must match the registered URI.
@@ -95,7 +100,8 @@ class Settings(BaseSettings):
     # derived from jwt_secret (dev convenience) and a warning-worthy default.
     token_encryption_key: str = ""
     # Allow the clearly-labeled FIXTURE connector for local demos without real
-    # provider credentials. Never used to masquerade as REAL.
+    # provider credentials. Never used to masquerade as REAL. Only has any
+    # effect when oauth_connectors_enabled is on.
     allow_fixture_connectors: bool = True
 
     @field_validator("cors_origins", mode="before")
@@ -136,7 +142,9 @@ class Settings(BaseSettings):
                 raise RuntimeError(
                     "CRIX_TOKEN_ENCRYPTION_KEY must be set in production (Fernet key)."
                 )
-            if not (self.google_client_id or self.linkedin_client_id or self.instagram_client_id):
+            if self.oauth_connectors_enabled and not (
+                self.google_client_id or self.linkedin_client_id
+            ):
                 # Not fatal: the product runs without OAuth. Surfaced so ops knows.
                 pass
 
@@ -144,14 +152,12 @@ class Settings(BaseSettings):
         return {
             "google": self.google_client_secret,
             "linkedin": self.linkedin_client_secret,
-            "instagram": self.instagram_client_secret,
         }.get(provider, "")
 
     def oauth_client_id(self, provider: str) -> str:
         return {
             "google": self.google_client_id,
             "linkedin": self.linkedin_client_id,
-            "instagram": self.instagram_client_id,
         }.get(provider, "")
 
 

@@ -37,7 +37,7 @@ class ProviderInfo:
     # Endpoint that lists which redirect URIs the app must register.
     docs_url: str
     extra_authorize_params: dict[str, str] = field(default_factory=dict)
-    # Professional-account-only APIs (e.g. Instagram) should say so in the UI.
+    # A provider whose API is restricted to a particular account class says so.
     account_requirement: str = ""
     # What official API data CRIX may actually read (surfaced in the UI).
     exposes: tuple[str, ...] = ()
@@ -93,28 +93,6 @@ PROVIDERS: dict[str, ProviderInfo] = {
             "Connected-applications list",
             "Breach / compromise status",
             "Password reuse",
-        ),
-    ),
-    "instagram": ProviderInfo(
-        key="instagram",
-        label="Instagram (Professional)",
-        authorize_url="https://www.instagram.com/oauth/authorize",
-        token_url="https://api.instagram.com/oauth/access_token",
-        userinfo_url="https://graph.instagram.com/me",
-        scopes=("instagram_business_basic", "instagram_business_manage_messages"),
-        docs_url="https://developers.facebook.com/docs/instagram-platform",
-        extra_authorize_params={"response_type": "code"},
-        account_requirement="Professional (Business/Creator) account required",
-        exposes=(
-            "Professional account identity (id, username, account_type)",
-            "Profile / media / messaging data permitted by the official API",
-        ),
-        does_not_expose=(
-            "Password / credential exposure",
-            "Full MFA status",
-            "Account compromise status",
-            "Arbitrary account security settings",
-            "Personal-consumer-account security data",
         ),
     ),
 }

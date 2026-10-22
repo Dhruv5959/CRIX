@@ -9,12 +9,14 @@ from app.config import get_settings
 from app.routers import (
     accounts,
     analysis,
+    assets,
     auth,
     breach,
     graph,
     health,
     knowledge,
     oauth,
+    org,
     password_check,
     phishing,
     planner,
@@ -46,6 +48,8 @@ app.add_middleware(
 for router in (
     health.router,
     auth.router,
+    org.router,
+    assets.router,
     accounts.router,
     breach.router,
     password_check.router,

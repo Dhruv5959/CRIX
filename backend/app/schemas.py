@@ -69,6 +69,9 @@ class ConnectionStatus(str, Enum):
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=10, max_length=128)
+    # Registration creates the organization; the registrant becomes its first
+    # ORG_ADMIN (§4). Optional so an existing client still works.
+    org_name: str | None = Field(default=None, max_length=200)
 
 
 class LoginRequest(BaseModel):
@@ -102,6 +105,188 @@ class PasswordResetRequest(BaseModel):
 class PasswordResetConfirm(BaseModel):
     token: str = Field(min_length=10, max_length=200)
     new_password: str = Field(min_length=10, max_length=128)
+
+
+# --------------------------------------------------------------------------- #
+# Organizations, membership roles, invitations, company assets (§4)
+# --------------------------------------------------------------------------- #
+class OrgRole(str, Enum):
+    """The three roles of the RBAC matrix (see docs/RBAC.md)."""
+
+    ORG_ADMIN = "ORG_ADMIN"
+    MEMBER = "MEMBER"
+    VIEWER = "VIEWER"
+
+
+# Asset types CRIX assesses: COMPANY-OWNED only (§2). Personal accounts and
+# personal devices are explicitly out of scope, so they are rejected below.
+COMPANY_ASSET_TYPES = (
+    "WORK_EMAIL",
+    "WORKSPACE_IDENTITY",
+    "CODE_REPOSITORY",
+    "CLOUD_STORAGE",
+    "CI_SYSTEM",
+    "BUSINESS_APP",
+    "DOMAIN",
+    "SAAS_DEPENDENCY",
+    "OTHER_COMPANY",
+)
+PERSONAL_ASSET_TYPES = (
+    "PERSONAL_ACCOUNT",
+    "PERSONAL_DEVICE",
+    "PERSONAL_EMAIL",
+    "BYOD",
+    "PERSONAL",
+)
+
+
+class OrgUpdateRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=200)
+
+
+class OrgResponse(BaseModel):
+    id: str
+    name: str
+    slug: str
+    role: OrgRole
+    member_count: int
+    asset_count: int
+    created_at: dt.datetime
+
+
+class MemberResponse(BaseModel):
+    membership_id: str
+    user_id: str
+    email: EmailStr
+    role: OrgRole
+    is_active: bool
+    joined_at: dt.datetime
+    # Aggregate only: what an admin may see for every member by default.
+    assets_owned: int
+
+
+class MemberDetailResponse(BaseModel):
+    """Member-level detail. Reading another member's detail is audit-logged."""
+
+    membership_id: str
+    user_id: str
+    email: EmailStr
+    role: OrgRole
+    is_active: bool
+    joined_at: dt.datetime
+    assets: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class InvitationCreateRequest(BaseModel):
+    email: EmailStr
+    role: OrgRole = OrgRole.MEMBER
+
+
+class InvitationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    email: str
+    role: str
+    expires_at: dt.datetime
+    used_at: dt.datetime | None
+    created_at: dt.datetime
+
+
+class InvitationCreatedResponse(InvitationResponse):
+    """Returned ONLY to the inviting admin so the link can be shared.
+
+    The raw token is never written to logs or to the audit trail.
+    """
+
+    invite_link: str
+
+
+class InvitationAcceptRequest(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+    # Required only when the invited email has no account yet.
+    password: str | None = Field(default=None, min_length=10, max_length=128)
+
+
+class OrgAssetCreate(BaseModel):
+    asset_id: str = Field(min_length=1, max_length=64)
+    asset_type: str
+    label: str = Field(min_length=1, max_length=200)
+    service_name: str | None = Field(default=None, max_length=120)
+    # 1 (low) .. 5 (business-critical). Admin-set importance, not a risk score.
+    criticality: int = Field(default=3, ge=1, le=5)
+    owner_membership_id: str | None = None
+
+    @field_validator("asset_type")
+    @classmethod
+    def _company_owned_only(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized in PERSONAL_ASSET_TYPES:
+            raise ValueError(
+                "Personal accounts and personal/BYOD devices are out of scope for "
+                "CRIX. Register only company-owned assets (work email, workspace, "
+                "repositories, cloud storage, CI, business apps, domains)."
+            )
+        if normalized not in COMPANY_ASSET_TYPES:
+            raise ValueError(
+                f"Unknown asset_type {value!r}. Allowed: {', '.join(COMPANY_ASSET_TYPES)}."
+            )
+        return normalized
+
+
+class OrgAssetUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=200)
+    service_name: str | None = Field(default=None, max_length=120)
+    criticality: int | None = Field(default=None, ge=1, le=5)
+    owner_membership_id: str | None = None
+
+
+class OrgAssetResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    asset_id: str
+    asset_type: str
+    label: str
+    service_name: str | None
+    criticality: int
+    owner_membership_id: str | None
+    source_mode: str
+    created_at: dt.datetime
+
+
+class AssetDependencyCreate(BaseModel):
+    from_asset_id: str = Field(min_length=1, max_length=64)
+    to_asset_id: str = Field(min_length=1, max_length=64)
+    relationship_type: str = Field(min_length=1, max_length=40)
+    weight: float = Field(default=1.0, ge=0.0, le=1.0)
+    note: str = Field(default="", max_length=500)
+
+
+class AssetDependencyResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    from_asset_id: str
+    to_asset_id: str
+    relationship_type: str
+    edge_source: str
+    weight: float
+    note: str
+    created_at: dt.datetime
+
+
+class AdminViewResponse(BaseModel):
+    """An admin's access to a member's data, shown to that member."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    admin_email: str | None
+    action: str
+    resource: str
+    detail: dict[str, Any]
+    created_at: dt.datetime
 
 
 # --------------------------------------------------------------------------- #

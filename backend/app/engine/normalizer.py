@@ -39,7 +39,7 @@ def _source_mode(event: SecurityEventSchema) -> str:
     if mode is not None:
         return mode.value if hasattr(mode, "value") else str(mode)
     src = (event.source or "").lower()
-    if src in ("hibp", "xposedornot", "oauth", "google", "linkedin", "instagram"):
+    if src in ("hibp", "xposedornot", "oauth", "google", "linkedin"):
         return "REAL"
     if src in ("simulated", "scenario"):
         return "SIMULATED"

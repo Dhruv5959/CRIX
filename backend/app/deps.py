@@ -1,18 +1,25 @@
-"""Authentication dependencies: resolve the current user from a bearer token.
+"""Authentication and authorization dependencies.
 
-All data-access endpoints depend on ``get_current_user`` so every query can be
-scoped to ``current_user.id`` (§2, §14 IDOR).
+``get_current_user`` resolves the authenticated user from a bearer token;
+``get_current_membership`` resolves that user's role inside their organization;
+``require_role`` turns a role into a server-side authorization gate.
+
+Every organization-scoped endpoint depends on the membership so the ``org_id``
+used to scope the query comes from the database, never from the client (§4).
 """
 from __future__ import annotations
+
+from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import ExpiredSignatureError, InvalidTokenError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db import get_db
-from app.models import User
+from app.models import Membership, User
 from app.security import decode_access_token
 
 _bearer = HTTPBearer(auto_error=False)
@@ -51,3 +58,50 @@ def get_current_user(
             detail="User not found or inactive.",
         )
     return user
+
+
+def get_current_membership(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+) -> Membership:
+    """Resolve the caller's active membership in their organization.
+
+    The returned membership is the authorization authority for every
+    organization-scoped query, so a client can never spoof an ``org_id`` via a
+    header or body field (§4, §14 IDOR).
+    """
+    membership = db.scalar(
+        select(Membership)
+        .where(
+            Membership.user_id == current_user.id,
+            Membership.is_active.is_(True),
+        )
+        .order_by(Membership.created_at.asc())
+    )
+    if membership is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not belong to an organization.",
+        )
+    return membership
+
+
+def require_role(*roles: str):
+    """Build a dependency that gates an endpoint to the given role(s).
+
+    The check is server-side against the stored membership role; a client cannot
+    elevate its own role.
+    """
+    allowed = frozenset(roles)
+
+    def _dependency(
+        membership: Annotated[Membership, Depends(get_current_membership)],
+    ) -> Membership:
+        if membership.role not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your role does not permit this action.",
+            )
+        return membership
+
+    return _dependency

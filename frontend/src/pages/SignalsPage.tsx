@@ -94,7 +94,7 @@ function AccountManager({
           <div>
             <Label>Service</Label>
             <Select value={service} onChange={(e) => setService(e.target.value)}>
-              {["Google", "GitHub", "Microsoft", "Apple", "Instagram", "Dropbox", "PayPal", "Coinbase", "Steam", "Reddit"].map((s) => (
+              {["Google", "GitHub", "Microsoft", "Apple", "Dropbox", "PayPal", "Coinbase", "Steam", "Reddit"].map((s) => (
                 <option key={s}>{s}</option>
               ))}
             </Select>

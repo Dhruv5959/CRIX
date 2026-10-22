@@ -36,6 +36,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/oauth", tags=["oauth"])
 
+# OAuth is FROZEN for CRIX-SMB (§1.4): the connector surface is disabled by
+# default *in code*. When disabled every endpoint behaves as if it does not
+# exist (404), so it is absent from the API, the UI and the demo.
+_CONNECTORS_DISABLED_DETAIL = "Not found."
+
+
+def _require_connectors_enabled(settings: Settings) -> None:
+    if not settings.oauth_connectors_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_CONNECTORS_DISABLED_DETAIL)
+
 
 def _ensure_capability_seed(db: Session) -> None:
     count = db.scalar(
@@ -51,6 +61,7 @@ def providers(settings: Annotated[Settings, Depends(get_settings)]) -> dict:
 
     Never includes client secrets.
     """
+    _require_connectors_enabled(settings)
     payload = {}
     for key, info in PROVIDERS.items():
         payload[key] = {
@@ -70,8 +81,10 @@ def providers(settings: Annotated[Settings, Depends(get_settings)]) -> dict:
 @router.get("/capabilities")
 def capabilities(
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> dict:
     """Curated capability matrix: can the official API actually return this?"""
+    _require_connectors_enabled(settings)
     _ensure_capability_seed(db)
     rows = db.scalars(select(ProviderCapability)).all()
     return {
@@ -104,6 +117,7 @@ def authorize(
     settings: Settings = Depends(get_settings),
 ):
     """Start the authorization-code + PKCE flow. Returns the URL to open."""
+    _require_connectors_enabled(settings)
     if provider not in PROVIDERS:
         raise HTTPException(status_code=404, detail="Unknown provider.")
     if not is_configured(provider, settings):
@@ -140,6 +154,8 @@ def callback(
         sep = "&" if "?" in frontend else "?"
         return RedirectResponse(f"{frontend}{sep}{extra}")
 
+    if not settings.oauth_connectors_enabled:
+        return _bounce("oauth_error=connectors_disabled")
     if error:
         logger.warning("oauth provider returned error: %s", error)
         return _bounce("oauth_error=provider_denied")
@@ -280,7 +296,9 @@ def _ensure_asset(*, db, user_id, provider, profile, account_id, settings, sourc
 def list_connections(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> dict:
+    _require_connectors_enabled(settings)
     rows = db.scalars(
         select(ProviderConnection).where(ProviderConnection.user_id == current_user.id)
     ).all()
@@ -312,7 +330,9 @@ def disconnect(
     connection_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> None:
+    _require_connectors_enabled(settings)
     row = db.scalar(
         select(ProviderConnection).where(
             ProviderConnection.user_id == current_user.id,
@@ -342,7 +362,6 @@ def disconnect(
 _FIXTURE_ACCOUNTS = {
     "google": ("Gmail", "gmail-demo@example.com"),
     "linkedin": ("LinkedIn", "linkedin-demo-profile"),
-    "instagram": ("Instagram", "instagram_professional_demo"),
 }
 
 
@@ -358,6 +377,7 @@ def connect_fixture(
     source_mode = FIXTURE (never REAL). Used only when the provider has no real
     credentials configured, or when explicitly requested for a demo.
     """
+    _require_connectors_enabled(settings)
     if provider not in PROVIDERS:
         raise HTTPException(status_code=404, detail="Unknown provider.")
     if not settings.allow_fixture_connectors or settings.is_production:

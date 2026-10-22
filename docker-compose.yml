@@ -1,0 +1,49 @@
+# CRIX-SMB local PostgreSQL for the full-stack path.
+#
+# SQLite remains the default for local dev and tests. To run the API (and the
+# test suite) against PostgreSQL:
+#
+#   docker compose up -d postgres
+#   # then, in the shell that runs the app/tests:
+#   $env:CRIX_DATABASE_URL = "postgresql+psycopg://crix:crix@localhost:5432/crix"
+#   cd backend; alembic upgrade head
+#
+# The test suite honors CRIX_TEST_DATABASE_URL for the same purpose:
+#   $env:CRIX_TEST_DATABASE_URL = "postgresql+psycopg://crix:crix@localhost:5432/crix_test"
+#
+# These credentials are for LOCAL DEVELOPMENT ONLY.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: crix-postgres
+    environment:
+      POSTGRES_USER: crix
+      POSTGRES_PASSWORD: crix
+      POSTGRES_DB: crix
+    ports:
+      - "5432:5432"
+    volumes:
+      - crix_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crix -d crix"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Optional: a second database purely for the test suite.
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: crix-postgres-test
+    profiles: ["test"]
+    environment:
+      POSTGRES_USER: crix
+      POSTGRES_PASSWORD: crix
+      POSTGRES_DB: crix_test
+    ports:
+      - "5433:5432"
+    volumes:
+      - crix_pgdata_test:/var/lib/postgresql/data
+
+volumes:
+  crix_pgdata:
+  crix_pgdata_test:

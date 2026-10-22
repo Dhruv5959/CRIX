@@ -1,0 +1,233 @@
+"""Company asset and dependency management (§2, §7).
+
+* Reads are available to every role.
+* Writes (create/update/delete asset, declare/remove dependency) are
+  ORG_ADMIN-only and are recorded in the audit log.
+* Every query is scoped to the caller's ``org_id``; an id from another
+  organization is indistinguishable from a missing one (404).
+"""
+from __future__ import annotations
+
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app import audit
+from app.db import get_db
+from app.deps import get_current_membership, require_role
+from app.models import AssetDependency, Membership, OrgAsset
+from app.schemas import (
+    AssetDependencyCreate,
+    AssetDependencyResponse,
+    OrgAssetCreate,
+    OrgAssetResponse,
+    OrgAssetUpdate,
+    OrgRole,
+)
+
+router = APIRouter(prefix="/api", tags=["assets"])
+
+ADMIN_ROLES = (OrgRole.ORG_ADMIN.value,)
+
+
+def _get_asset(db: Session, org_id: str, asset_id: str) -> OrgAsset:
+    asset = db.scalar(
+        select(OrgAsset).where(OrgAsset.org_id == org_id, OrgAsset.asset_id == asset_id)
+    )
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found.")
+    return asset
+
+
+def _validate_owner(db: Session, org_id: str, membership_id: str | None) -> None:
+    if membership_id is None:
+        return
+    owner = db.scalar(
+        select(Membership).where(Membership.id == membership_id, Membership.org_id == org_id)
+    )
+    if owner is None:
+        raise HTTPException(
+            status_code=422, detail="owner_membership_id is not a member of this organization."
+        )
+
+
+@router.get("/assets", response_model=list[OrgAssetResponse])
+def list_assets(
+    membership: Annotated[Membership, Depends(get_current_membership)],
+    db: Session = Depends(get_db),
+) -> list[OrgAsset]:
+    return list(
+        db.scalars(
+            select(OrgAsset)
+            .where(OrgAsset.org_id == membership.org_id)
+            .order_by(OrgAsset.criticality.desc(), OrgAsset.created_at.asc())
+        ).all()
+    )
+
+
+@router.post("/assets", response_model=OrgAssetResponse, status_code=status.HTTP_201_CREATED)
+def create_asset(
+    payload: OrgAssetCreate,
+    membership: Annotated[Membership, Depends(require_role(*ADMIN_ROLES))],
+    db: Session = Depends(get_db),
+) -> OrgAsset:
+    _validate_owner(db, membership.org_id, payload.owner_membership_id)
+    existing = db.scalar(
+        select(OrgAsset).where(
+            OrgAsset.org_id == membership.org_id, OrgAsset.asset_id == payload.asset_id
+        )
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An asset with this asset_id already exists in this organization.",
+        )
+    asset = OrgAsset(
+        org_id=membership.org_id,
+        asset_id=payload.asset_id,
+        asset_type=payload.asset_type,
+        label=payload.label,
+        service_name=payload.service_name,
+        criticality=payload.criticality,
+        owner_membership_id=payload.owner_membership_id,
+        source_mode="USER_PROVIDED",
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    audit.record(
+        db, action="asset.created", user_id=membership.user_id,
+        detail={"org_id": membership.org_id, "asset_id": asset.asset_id,
+                "asset_type": asset.asset_type, "criticality": asset.criticality},
+    )
+    return asset
+
+
+@router.get("/assets/{asset_id}", response_model=OrgAssetResponse)
+def get_asset(
+    asset_id: str,
+    membership: Annotated[Membership, Depends(get_current_membership)],
+    db: Session = Depends(get_db),
+) -> OrgAsset:
+    return _get_asset(db, membership.org_id, asset_id)
+
+
+@router.patch("/assets/{asset_id}", response_model=OrgAssetResponse)
+def update_asset(
+    asset_id: str,
+    payload: OrgAssetUpdate,
+    membership: Annotated[Membership, Depends(require_role(*ADMIN_ROLES))],
+    db: Session = Depends(get_db),
+) -> OrgAsset:
+    asset = _get_asset(db, membership.org_id, asset_id)
+    if payload.owner_membership_id is not None:
+        _validate_owner(db, membership.org_id, payload.owner_membership_id)
+        asset.owner_membership_id = payload.owner_membership_id
+    if payload.label is not None:
+        asset.label = payload.label
+    if payload.service_name is not None:
+        asset.service_name = payload.service_name
+    if payload.criticality is not None:
+        asset.criticality = payload.criticality
+    db.commit()
+    db.refresh(asset)
+    audit.record(
+        db, action="asset.updated", user_id=membership.user_id,
+        detail={"org_id": membership.org_id, "asset_id": asset.asset_id,
+                "criticality": asset.criticality},
+    )
+    return asset
+
+
+@router.delete("/assets/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_asset(
+    asset_id: str,
+    membership: Annotated[Membership, Depends(require_role(*ADMIN_ROLES))],
+    db: Session = Depends(get_db),
+) -> None:
+    asset = _get_asset(db, membership.org_id, asset_id)
+    db.delete(asset)
+    db.commit()
+    audit.record(
+        db, action="asset.deleted", user_id=membership.user_id,
+        detail={"org_id": membership.org_id, "asset_id": asset_id},
+    )
+
+
+@router.get("/dependencies", response_model=list[AssetDependencyResponse])
+def list_dependencies(
+    membership: Annotated[Membership, Depends(get_current_membership)],
+    db: Session = Depends(get_db),
+) -> list[AssetDependency]:
+    return list(
+        db.scalars(
+            select(AssetDependency)
+            .where(AssetDependency.org_id == membership.org_id)
+            .order_by(AssetDependency.created_at.asc())
+        ).all()
+    )
+
+
+@router.post(
+    "/dependencies", response_model=AssetDependencyResponse, status_code=status.HTTP_201_CREATED
+)
+def create_dependency(
+    payload: AssetDependencyCreate,
+    membership: Annotated[Membership, Depends(require_role(*ADMIN_ROLES))],
+    db: Session = Depends(get_db),
+) -> AssetDependency:
+    # Both endpoints must exist in THIS organization — CRIX never invents edges
+    # and never links across tenants.
+    _get_asset(db, membership.org_id, payload.from_asset_id)
+    _get_asset(db, membership.org_id, payload.to_asset_id)
+    existing = db.scalar(
+        select(AssetDependency).where(
+            AssetDependency.org_id == membership.org_id,
+            AssetDependency.from_asset_id == payload.from_asset_id,
+            AssetDependency.to_asset_id == payload.to_asset_id,
+            AssetDependency.relationship_type == payload.relationship_type,
+        )
+    )
+    if existing is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Dependency already exists.")
+    edge = AssetDependency(
+        org_id=membership.org_id,
+        from_asset_id=payload.from_asset_id,
+        to_asset_id=payload.to_asset_id,
+        relationship_type=payload.relationship_type,
+        edge_source="ADMIN_DECLARED",
+        weight=payload.weight,
+        note=payload.note,
+    )
+    db.add(edge)
+    db.commit()
+    db.refresh(edge)
+    audit.record(
+        db, action="dependency.created", user_id=membership.user_id,
+        detail={"org_id": membership.org_id, "from": edge.from_asset_id,
+                "to": edge.to_asset_id, "type": edge.relationship_type},
+    )
+    return edge
+
+
+@router.delete("/dependencies/{dependency_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_dependency(
+    dependency_id: str,
+    membership: Annotated[Membership, Depends(require_role(*ADMIN_ROLES))],
+    db: Session = Depends(get_db),
+) -> None:
+    edge = db.scalar(
+        select(AssetDependency).where(
+            AssetDependency.id == dependency_id, AssetDependency.org_id == membership.org_id
+        )
+    )
+    if edge is None:
+        raise HTTPException(status_code=404, detail="Dependency not found.")
+    db.delete(edge)
+    db.commit()
+    audit.record(
+        db, action="dependency.deleted", user_id=membership.user_id,
+        detail={"org_id": membership.org_id, "dependency_id": dependency_id},
+    )

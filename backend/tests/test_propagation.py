@@ -72,9 +72,11 @@ def test_connection_does_not_imply_capability(client, auth_headers):
 
 def test_unconfigured_provider_reports_not_configured(client):
     body = client.get("/api/oauth/providers").json()
-    for provider in ("google", "linkedin", "instagram"):
+    for provider in ("google", "linkedin"):
         assert body["providers"][provider]["status"] == "NOT_CONFIGURED"
         assert body["providers"][provider]["configured"] is False
+    # Instagram was removed entirely (§1.4).
+    assert "instagram" not in body["providers"]
 
 
 def test_unconfigured_authorize_is_unavailable_not_silent(client, auth_headers):
@@ -123,7 +125,7 @@ def test_relationship_requires_known_accounts(client, auth_headers):
 
 def test_relationship_source_is_user_confirmed_and_weighted(client, auth_headers):
     src = _connect_fixture(client, auth_headers, "google")
-    dst = _connect_fixture(client, auth_headers, "instagram")
+    dst = _connect_fixture(client, auth_headers, "linkedin")
 
     resp = client.post(
         "/api/relationships",
@@ -144,7 +146,7 @@ def test_relationship_source_is_user_confirmed_and_weighted(client, auth_headers
 
 def test_relationship_rejects_unknown_type(client, auth_headers):
     src = _connect_fixture(client, auth_headers, "google")
-    dst = _connect_fixture(client, auth_headers, "instagram")
+    dst = _connect_fixture(client, auth_headers, "linkedin")
     resp = client.post(
         "/api/relationships",
         headers=auth_headers,
@@ -434,7 +436,7 @@ def test_known_weakness_still_dominates_unknown_floor(db_session, auth_headers, 
 # --------------------------------------------------------------------------- #
 def test_simulate_endpoint_runs_and_marks_simulated(client, auth_headers):
     src = _connect_fixture(client, auth_headers, "google")
-    dst = _connect_fixture(client, auth_headers, "instagram")
+    dst = _connect_fixture(client, auth_headers, "linkedin")
     client.post(
         "/api/relationships",
         headers=auth_headers,
