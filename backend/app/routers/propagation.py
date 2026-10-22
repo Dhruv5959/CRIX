@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.deps import get_current_user
-from app.engine import propagation, planner, risk
+from app.engine import pipeline, propagation, planner, risk
 from app.engine.shapley import attribute
 from app.models import (
     ConnectedSignal,
@@ -97,7 +97,14 @@ def simulate(
     events = list(
         db.scalars(select(SecurityEvent).where(SecurityEvent.user_id == current_user.id)).all()
     )
-    scenario_features = risk.extract_features(_to_schemas(events))
+    schemas = _to_schemas(events)
+    scenario_features = risk.extract_features(schemas)
+
+    # The SAME organization-scoped asset criticality the real run uses: a
+    # simulated compromise changes the evidence, never which asset matters.
+    criticality, _asset_context = pipeline.resolve_run_criticality(
+        db, current_user.id, schemas
+    )
 
     # A simulated compromise of a recovery-capable account raises exposure on
     # its dependency chain. We model it as full session+identity exposure on the
@@ -105,14 +112,16 @@ def simulate(
     scenario_features["session"] = 1.0
     scenario_features["identity"] = max(scenario_features.get("identity", 0.0), 0.7)
 
-    score, breakdown = risk.risk_from_features(scenario_features)
-    low, high = risk.sensitivity_range(scenario_features)
-    attribution = attribute(scenario_features)
+    score, breakdown = risk.risk_from_features(scenario_features, criticality=criticality)
+    low, high = risk.sensitivity_range(scenario_features, criticality=criticality)
+    attribution = attribute(scenario_features, criticality=criticality)
 
     # Remediation priority under the scenario: the SAME planner (greedy baseline
     # vs. one exact branch-and-bound), re-run on the scenario's feature vector.
-    scenario_plan = planner.compare(scenario_features, budget=6.0)
-    base_plan = planner.compare(risk.extract_features(_to_schemas(events)), budget=6.0)
+    scenario_plan = planner.compare(scenario_features, budget=6.0, criticality=criticality)
+    base_plan = planner.compare(
+        risk.extract_features(schemas), budget=6.0, criticality=criticality
+    )
 
     # Persist the (optional) simulation record for the Evaluation/audit trail.
     run_id = uuid.uuid4().hex
@@ -155,7 +164,10 @@ def simulate(
             "range_high": high,
             "base_risk": breakdown["base_risk"],
             "interaction_risk": breakdown["interaction_risk"],
+            "criticality_adjustment": breakdown["criticality_adjustment"],
             "mitigation_credit": breakdown["mitigation_credit"],
+            "criticality": criticality,
+            "model_version": risk.RISK_MODEL_VERSION,
         },
         "scenario_attribution": attribution,
         "scenario_plan": {

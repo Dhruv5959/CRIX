@@ -700,3 +700,93 @@ and PostgreSQL, but it has **not** been run against a real PostgreSQL server.
 * A correlation computed over another member's findings is not produced: `run_analysis` loads
   only the calling member's findings (the Phase 2 boundary), so correlations are per-member
   within the organization. Cross-member correlation would require the admin-view audit path.
+
+---
+
+## 14. Phase 4 completion record (2026-10-22)
+
+### 14.1 What changed
+
+| Area | Change |
+|---|---|
+| `app/engine/risk.py` | Smallest justified extension of the defensible formula: `risk = clip(m(c)×(base + interaction) − mitigation, 0, 100)`, `m(c) = 1 + 0.10×(c−3) ∈ [0.8, 1.2]`, `c=None → 1.0`. Full spec in `docs/RISK_MODEL.md`. Adds `RISK_MODEL_VERSION = "risk-2.0"`, `criticality_multiplier()` (raises on out-of-range/`bool`/non-int), `_validate_features()` (raises on intensity outside `[0,1]`, `NaN`, non-numeric — never silently clips), `criticality_adjustment` breakdown term for an exact additive UI identity, and traceability `components` (model version, criticality + multiplier, sorted `finding_ids`, fired `interaction_terms` whose sum equals `interaction_risk`, sorted `unavailable_inputs`, uncertainty notes). The module still contains no reference to grouped-link results — the two Phase 3 boundary tests pass **unchanged**. |
+| `app/engine/shapley.py`, `planner.py` | Both accept the run's `criticality` as value-function context (criticality fixed across coalitions ⇒ Shapley efficiency exact; `planner.comparison.initial_risk == score`). |
+| `app/engine/pipeline.py` | `resolve_org_criticality` / `resolve_run_criticality`: candidates = `FINDING` events bound to assets inside the run's org; every lookup through `assert_asset_in_org` (org-filtered); value = max criticality (tie → sorted id); unresolved candidates listed with reasons (`finding_not_in_this_organization`, `not_a_registered_asset_in_this_organization`) instead of being dropped. Run merges asset context, `org_id` and `correlations_consumed = {ids: [], note}` into the score's components. |
+| `app/models.py` + `migrations/versions/f3a1c2d4e5b6_risk_result_context.py` (new) | `risk_results` gains `org_id` (FK, nullable — NULL matches no tenant, fail-closed — indexed), `asset_id` (primary affected asset), `model_version` (server default `risk-1.0`), `criticality_adjustment` (default 0.0). Existence-guarded (the initial revision `create_all`s the current ORM on an empty DB), back-fills `org_id` from the writer's membership, reversible; downgrade drops exactly the 4 columns + index, never a row. |
+| Routers/schemas | `analysis.py` risk payload adds `model_version`, `criticality`, `criticality_adjustment`; what-if reuses the base run's criticality for before/after risk, sensitivity and attribution; `propagation.py` simulation resolves the same run criticality for scenario + base risk/attribution/planner and returns the new fields; `RiskResponse` gains the matching optional fields. |
+| Frontend | `types.ts` (risk/attribution-consumer types extended), `RiskPage.tsx` (criticality term + model version + "grouped-link results are not score inputs" footer), `OverviewPage.tsx` (formula subtitle + 5th metric), `PropagationPage.tsx` (scenario row). |
+| Docs | new `docs/RISK_MODEL.md` + `docs/PROGRESS.md`; `ARCHITECTURE.md` §6/table, `IMPLEMENTATION_STATUS.md`, `PRESENTATION.md` demo numbers (61.7 → 67.9, range 56–69 → 62–76, composition includes +6.2) updated to stay truthful. |
+
+### 14.2 Verified state (every command executed)
+
+| Check | Command | Result |
+|---|---|---|
+| Backend suite | `pytest` (backend) | **327 passed** (baseline 291 + 35 in `tests/test_risk_phase4.py` + 1 migration test) |
+| New tests | `pytest tests/test_risk_phase4.py tests/test_migrations.py` | 41 passed |
+| Migration on the real dev DB (columns already `create_all`-added, version still Phase 3) | `alembic upgrade head` | `d4e5f6a7b8c9 → f3a1c2d4e5b6`; column guards no-op'd; `ix_risk_results_org_id` created; every NULL `org_id` back-filled from the writer's membership |
+| Migration from empty + reversible round-trip | tests + fresh `alembic upgrade head` | full chain builds; downgrade in tests removes exactly the Phase 4 columns and keeps the legacy row |
+| Demo seed | `scripts/seed_demo.py` | risk **67.9 (HIGH)** (Phase 3: 61.7) = (48.5 + 13.2) × 1.1; adjustment **+6.17**; Shapley sum = total (err 0.0); planner gap 0.00% |
+| Persisted snapshot contract | dev DB query | `risk-2.0`, `org_id` set, `asset_id=demo@example.com`, `criticality 4`, `multiplier 1.1`, `REGISTERED`, `correlations_consumed.ids=[]` |
+| Frontend | `tsc --noEmit`, `vitest run`, `npm run build` | clean, **21 passed**, build exit 0 |
+
+New tests cover, per §3.7: every supported finding type → its documented
+feature group; severity linearity; criticality 1..5 derived from the documented
+literals (9.6 / 10.8 / 12.0 / 13.2 / 14.4 for breach 0.8) — expected values are
+computed in the test from documentation literals, never copied from engine
+output, and a parameter-drift test pins engine `RISK_PARAMS` == those literals;
+criticality alone never creates risk; neutral == missing == pre-Phase-4;
+out-of-range criticality/intensity/severity rejected (not clipped); missing
+criticality recorded as unknown, never as safe; unavailable inputs listed and
+never scored (and not "checked safe"); duplicates/overlaps/conflicts resolved by
+documented max/status rules; 45% cap and session discount under criticality;
+score bounds; determinism incl. order-independent traces; interaction terms sum
+to `interaction_risk`; cross-org rejection (both reasons, no foreign criticality
+leak); max-criticality primary asset; one context for score/attribution/planner;
+a declared dependency edge changes correlations but not the score; snapshots
+org-scoped with a historical `risk-1.0` row byte-for-byte untouched; API
+contract derived from the response's own feature vector; client-supplied
+criticality/score/org ignored; what-if keeps the run's criticality; no raw
+snapshot route exists; sensitivity brackets the estimate at every criticality;
+default (no-context) call reproduces the pre-Phase-4 score exactly.
+
+### 14.3 Postgres status — honestly NOT run (unchanged from §11.6 / §12.3 / §13.3)
+
+No Docker, no local server, `psycopg` not installed. Claim: **"DDL verified for
+the PostgreSQL dialect"** only. The Phase 4 migration contains a PostgreSQL
+`information_schema` / `pg_indexes` branch that never executed here. The
+`org_id` back-fill is one plain `UPDATE … SELECT` statement (standard SQL,
+dual-engine tested only on SQLite).
+
+### 14.4 Not done, not claimed
+
+* No per-asset feature re-scoping (interactions stay run-level — documented
+  limitation in `RISK_MODEL.md` §9), no org-wide score roll-up.
+* No risk value moved outside the documented formula; no ML change; OAuth stays
+  frozen; no paid dependency; no fabricated metric; score never described as a
+  probability of compromise.
+* Postgres suite not run (§14.3).
+
+### 14.5 Deviations and findings carried forward
+
+* **Dev-DB anomaly:** the working `crix.db` arrived with Phase 4 columns already
+  present while `alembic_version` was still `d4e5f6a7b8c9`, holding 4 demo
+  risk rows stamped `risk-2.0` with `org_id = NULL` and zero adjustment —
+  dated before this session's edits, i.e. an earlier discarded attempt that
+  went through `Base.metadata.create_all` outside the migration path. The real
+  migration was run against that exact state first (guards, index and back-fill
+  all verified on it), then the file was backed up to
+  `…\Temp\opencode\crix.db.phase4-backup`, deleted, rebuilt from empty with
+  `alembic upgrade head` and re-seeded. Final state verified (§14.2).
+* `risk_results.org_id` is **nullable** (unlike `correlations.org_id`'s `""`
+  sentinel): a risk row is written on every run, including for a user with no
+  active membership, and a NULL FK is valid on both engines while a sentinel
+  would violate the foreign key on PostgreSQL. NULL matches no tenant query —
+  same fail-closed property.
+* Bug found & fixed: `str(EventStatus.X)` stringifies as `"EventStatus.X"` —
+  status handling in `risk.py`/`pipeline.py` now unwraps `.value` explicitly.
+* Deviation kept: an earlier unexplained attempt's 4 dev rows did not survive
+  the honest rebuild (they were test/demo artifacts of unverified code, backed
+  up, not silently kept as if produced by this implementation).
+* Supersedes: the "Risk engine unchanged — 61.7" rows of §11/§12/§13. The
+  formula is deliberately changed **once**, as planned; the demo number is now
+  67.9 and every live doc was updated to match.

@@ -581,7 +581,13 @@ class RiskResponse(BaseModel):
     range_high: float
     base_risk: float
     interaction_risk: float
+    # Additive asset-criticality term (Phase 4); 0.0 when unadjusted.
+    criticality_adjustment: float = 0.0
     mitigation_credit: float
+    # Which formula produced this score (e.g. "risk-2.0") and the criticality
+    # input it was given (1..5, or None when no registered asset was bound).
+    model_version: str | None = None
+    criticality: int | None = None
     components: dict[str, Any]
 
 

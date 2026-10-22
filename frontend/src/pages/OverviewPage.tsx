@@ -68,11 +68,22 @@ export default function OverviewPage() {
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>Score Composition</CardTitle>
-            <span className="text-[11px] text-ink-faint">risk = base + interaction − mitigation</span>
+            <span className="text-[11px] text-ink-faint">
+              risk = (base + interaction) × asset criticality − mitigation
+            </span>
           </CardHeader>
-          <CardBody className="grid grid-cols-2 gap-5 sm:grid-cols-4">
+          <CardBody className="grid grid-cols-2 gap-5 sm:grid-cols-3">
             <Metric label="Base risk" value={formatNumber(risk.base_risk)} hint="sum of signal weights" />
             <Metric label="Interaction" value={`+${formatNumber(risk.interaction_risk)}`} hint="non-additive compounding" />
+            <Metric
+              label="Asset criticality"
+              value={`${risk.criticality_adjustment >= 0 ? "+" : "−"}${formatNumber(Math.abs(risk.criticality_adjustment))}`}
+              hint={
+                risk.criticality == null
+                  ? "no asset bound — unadjusted"
+                  : `importance ${risk.criticality} of 5`
+              }
+            />
             <Metric label="Mitigation credit" value={`−${formatNumber(risk.mitigation_credit)}`} hint="controls in place" />
             <Metric label="Findings" value={`${findings.length}`} hint={`${unavailable.length} unavailable`} />
           </CardBody>

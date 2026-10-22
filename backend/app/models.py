@@ -339,11 +339,33 @@ class Correlation(Base, TimestampMixin):
 
 
 class RiskResult(Base, TimestampMixin):
+    """One persisted risk snapshot (Phase 4: traceable, organization-scoped).
+
+    A snapshot is INSERTED per run and never rewritten: ``model_version``
+    records which formula produced the row, so scores computed before a model
+    change stay identifiable (``risk-1.0`` = pre-criticality, ``risk-2.0`` =
+    the documented contextual formula). ``org_id`` scopes snapshots to the
+    tenant that produced them (NULL only for a run whose writer had no active
+    membership, which matches no tenant query); ``asset_id`` is the most
+    important registered asset affected by the findings (NULL = none bound).
+    """
+
     __tablename__ = "risk_results"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    org_id: Mapped[str | None] = mapped_column(
+        String(32),
+        ForeignKey("organizations.id", ondelete="CASCADE", name="fk_risk_results_org_id"),
+        index=True,
+        nullable=True,
+        default=None,
+    )
+    asset_id: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
+    model_version: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="risk-2.0", server_default="risk-1.0"
     )
     run_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     score: Mapped[float] = mapped_column(Float, nullable=False)
@@ -353,6 +375,10 @@ class RiskResult(Base, TimestampMixin):
     range_high: Mapped[float] = mapped_column(Float, nullable=False)
     base_risk: Mapped[float] = mapped_column(Float, nullable=False)
     interaction_risk: Mapped[float] = mapped_column(Float, nullable=False)
+    # Additive criticality term (0.0 for snapshots from risk-1.0 rows).
+    criticality_adjustment: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0.0"
+    )
     mitigation_credit: Mapped[float] = mapped_column(Float, nullable=False)
     components: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
 

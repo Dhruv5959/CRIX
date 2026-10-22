@@ -263,3 +263,129 @@ def test_phase3_upgrade_preserves_and_backfills_legacy_rows(tmp_path, monkeypatc
         assert json.loads(ids) == ["evt_b", "evt_a"]
     finally:
         get_settings.cache_clear()
+
+
+def _build_phase3_risk_results_shape(db_path: Path) -> None:
+    """Leave ``risk_results`` exactly as Phase 3 stored it.
+
+    The initial revision materializes the *current* ORM schema via
+    ``create_all`` (which already includes the Phase 4 columns), so the table
+    is rebuilt in its pre-Phase-4 shape and the revision is stamped — making
+    ``f3a1c2d4e5b6`` the revision that actually alters it.
+    """
+    from sqlalchemy import create_engine
+
+    engine = create_engine(f"sqlite:///{db_path.as_posix()}", future=True)
+    Base.metadata.create_all(engine)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            DROP TABLE IF EXISTS risk_results;
+            CREATE TABLE risk_results (
+                id VARCHAR(32) NOT NULL PRIMARY KEY,
+                user_id VARCHAR(32) NOT NULL,
+                run_id VARCHAR(32) NOT NULL,
+                score FLOAT NOT NULL,
+                band VARCHAR(20) NOT NULL,
+                confidence VARCHAR(20) NOT NULL,
+                range_low FLOAT NOT NULL,
+                range_high FLOAT NOT NULL,
+                base_risk FLOAT NOT NULL,
+                interaction_risk FLOAT NOT NULL,
+                mitigation_credit FLOAT NOT NULL,
+                components JSON NOT NULL,
+                created_at DATETIME NOT NULL
+            );
+            CREATE INDEX ix_risk_results_user_id ON risk_results (user_id);
+            CREATE INDEX ix_risk_results_run_id ON risk_results (run_id);
+
+            INSERT INTO users (id, email, password_hash, is_active, email_verified,
+                               totp_enabled, created_at)
+            VALUES ('user-1', 'legacy@example.com', 'x', 1, 0, 0, '2026-01-01 00:00:00');
+            INSERT INTO organizations (id, name, slug, created_by_user_id, created_at)
+            VALUES ('org-1', 'Legacy Co', 'legacy-co', 'user-1', '2026-01-01 00:00:00');
+            INSERT INTO memberships (id, org_id, user_id, role, is_active, created_at)
+            VALUES ('mem-1', 'org-1', 'user-1', 'ORG_ADMIN', 1, '2026-01-01 00:00:00');
+
+            INSERT INTO risk_results (id, user_id, run_id, score, band, confidence,
+                                      range_low, range_high, base_risk, interaction_risk,
+                                      mitigation_credit, components, created_at)
+            VALUES ('risk-legacy', 'user-1', 'run-legacy', 61.7, 'HIGH', 'high',
+                    58.0, 65.0, 48.5, 13.2, 0.0,
+                    '{"note": "pre-criticality snapshot"}',
+                    '2026-01-01 00:00:00');
+
+            CREATE TABLE IF NOT EXISTS alembic_version (
+                version_num VARCHAR(32) NOT NULL PRIMARY KEY
+            );
+            DELETE FROM alembic_version;
+            INSERT INTO alembic_version (version_num) VALUES ('d4e5f6a7b8c9');
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+        engine.dispose()
+
+
+def test_phase4_upgrade_adds_risk_context_and_preserves_snapshots(tmp_path, monkeypatch):
+    """Phase 4 must add + back-fill without re-scoring or deleting a snapshot."""
+    db_path = tmp_path / "legacy_risk.db"
+    monkeypatch.setenv("CRIX_DATABASE_URL", f"sqlite:///{db_path.as_posix()}")
+    get_settings.cache_clear()
+    cfg = _alembic_config(db_path)
+    try:
+        # 1. Build the database exactly as it stood at the end of Phase 3.
+        _build_phase3_risk_results_shape(db_path)
+        assert _columns(db_path, "risk_results") == {
+            "id", "user_id", "run_id", "score", "band", "confidence", "range_low",
+            "range_high", "base_risk", "interaction_risk", "mitigation_credit",
+            "components", "created_at",
+        }
+
+        # 2. Run the Phase 4 revision.
+        command.upgrade(cfg, "head")
+
+        assert _columns(db_path, "risk_results") >= {
+            "org_id", "asset_id", "model_version", "criticality_adjustment",
+        }
+
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT score, band, org_id, asset_id, model_version, "
+                "criticality_adjustment, components FROM risk_results "
+                "WHERE id = 'risk-legacy'"
+            ).fetchone()
+            index_names = {
+                r[1] for r in conn.execute("PRAGMA index_list(risk_results)").fetchall()
+            }
+        finally:
+            conn.close()
+        assert row is not None, "the pre-Phase-4 snapshot must survive the migration"
+        score, band, org_id, asset_id, model_version, adjustment, components = row
+        # Values are preserved byte-for-byte; only honest back-fills are added.
+        assert (score, band) == (61.7, "HIGH")
+        assert json.loads(components) == {"note": "pre-criticality snapshot"}
+        assert org_id == "org-1", "org_id must be back-filled from the membership"
+        assert asset_id is None, "the old rows bound no asset — nothing is invented"
+        assert model_version == "risk-1.0", "old rows keep the formula that made them"
+        assert adjustment == 0.0, "risk-1.0 had no criticality term"
+        assert "ix_risk_results_org_id" in index_names, "org-scoped reads need the index"
+
+        # 3. And it reverses without losing the snapshot.
+        command.downgrade(cfg, "d4e5f6a7b8c9")
+        assert _columns(db_path, "risk_results").isdisjoint(
+            {"org_id", "asset_id", "model_version", "criticality_adjustment"}
+        )
+        conn = sqlite3.connect(db_path)
+        try:
+            kept = conn.execute(
+                "SELECT score FROM risk_results WHERE id = 'risk-legacy'"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert kept == (61.7,), "downgrade must not delete risk snapshots"
+    finally:
+        get_settings.cache_clear()

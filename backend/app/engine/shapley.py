@@ -1,9 +1,16 @@
 """Exact cooperative-game Shapley attribution over the CRIX risk function (§7).
 
 We treat each feature group as a player in a cooperative game whose
-characteristic function is ``v(S) = risk_from_features(features restricted to S)``
-with base value ``v(empty) = 0``. This is an EXACT computation (no sampling, no
-approximation) because the number of features is small (2^n subsets, n = 12).
+characteristic function is ``v(S) = risk_from_features(features restricted to
+S, criticality=criticality)`` with base value ``v(empty) = 0``. This is an
+EXACT computation (no sampling, no approximation) because the number of
+features is small (2^n subsets, n = 12).
+
+The asset criticality is part of the value function's CONTEXT: it is held
+fixed for every coalition (the game explains the score as computed for THAT
+asset), which keeps efficiency exact — contributions sum to
+``v(full) - v(empty) == the displayed score``. Adding the criticality as an
+extra player is possible later without changing this contract.
 
 Two properties fall out and are tested:
 - Efficiency: sum_i phi_i == v(full) - v(empty) == the total risk score.
@@ -28,7 +35,9 @@ def _weight(subset_size: int, n: int) -> float:
     return math.factorial(subset_size) * math.factorial(n - subset_size - 1) / math.factorial(n)
 
 
-def shapley_values(features: dict[str, float]) -> tuple[dict[str, float], float]:
+def shapley_values(
+    features: dict[str, float], *, criticality: int | None = None
+) -> tuple[dict[str, float], float]:
     """Return (contributions_by_feature, total_risk). Exact enumeration."""
     n = N_FEATURES
     order = list(ALL_FEATURES)
@@ -39,7 +48,7 @@ def shapley_values(features: dict[str, float]) -> tuple[dict[str, float], float]
         if mask == 0:
             return 0.0
         subset = {order[i]: values[i] for i in range(n) if mask & (1 << i)}
-        score, _ = risk_from_features(subset)
+        score, _ = risk_from_features(subset, criticality=criticality)
         return score
 
     full_mask = (1 << n) - 1
@@ -60,10 +69,12 @@ def shapley_values(features: dict[str, float]) -> tuple[dict[str, float], float]
     return contributions, round(total, 9)
 
 
-def attribute(events_features: dict[str, float]) -> dict:
+def attribute(
+    events_features: dict[str, float], *, criticality: int | None = None
+) -> dict:
     """Attribution wrapper adding timing and an explicit efficiency check."""
     start = time.perf_counter()
-    contributions, total = shapley_values(events_features)
+    contributions, total = shapley_values(events_features, criticality=criticality)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     summed = sum(contributions.values())
     return {

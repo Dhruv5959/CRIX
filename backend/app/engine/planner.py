@@ -113,20 +113,24 @@ def apply_actions(features: dict[str, float], keys: list[str]) -> dict[str, floa
     return updated
 
 
-def _risk(features: dict[str, float]) -> float:
-    score, _ = risk_from_features(features)
+def _risk(features: dict[str, float], criticality: int | None = None) -> float:
+    score, _ = risk_from_features(features, criticality=criticality)
     return score
 
 
 def greedy_plan(
-    features: dict[str, float], *, budget: float, candidate_actions: list[str] | None = None
+    features: dict[str, float],
+    *,
+    budget: float,
+    candidate_actions: list[str] | None = None,
+    criticality: int | None = None,
 ) -> dict:
     """Greedy baseline: best reduction-per-effort that fits the remaining budget."""
     candidates = list(candidate_actions or ACTIONS.keys())
     remaining_budget = budget
     chosen: list[str] = []
     current = dict(features)
-    current_risk = _risk(current)
+    current_risk = _risk(current, criticality)
 
     while True:
         best_choice = None
@@ -138,7 +142,7 @@ def greedy_plan(
             if effort > remaining_budget + 1e-9:
                 continue
             trial = apply_action(current, key)
-            reduction = current_risk - _risk(trial)
+            reduction = current_risk - _risk(trial, criticality)
             if reduction <= 1e-9:
                 continue
             ratio = reduction / effort
@@ -150,7 +154,7 @@ def greedy_plan(
         chosen.append(best_choice)
         remaining_budget -= ACTIONS[best_choice].effort
         current = apply_action(current, best_choice)
-        current_risk = _risk(current)
+        current_risk = _risk(current, criticality)
 
     return {
         "method": "greedy",
@@ -161,7 +165,11 @@ def greedy_plan(
 
 
 def exact_plan(
-    features: dict[str, float], *, budget: float, candidate_actions: list[str] | None = None
+    features: dict[str, float],
+    *,
+    budget: float,
+    candidate_actions: list[str] | None = None,
+    criticality: int | None = None,
 ) -> dict:
     """Exact branch-and-bound over the bounded action set.
 
@@ -174,17 +182,17 @@ def exact_plan(
     # Order by effort ascending to reach feasible incumbents early.
     candidates.sort(key=lambda k: ACTIONS[k].effort)
 
-    initial_risk = _risk(features)
+    initial_risk = _risk(features, criticality)
     best = {"risk_after": initial_risk, "actions": [], "effort": 0.0}
 
     def optimistic(current: dict[str, float], remaining: list[str]) -> float:
         # Valid lower bound on achievable risk: applying every remaining action
         # yields the minimum of the monotone risk function over the full action
         # set; dropping budget feasibility can only raise the true optimum.
-        return _risk(apply_actions(current, remaining))
+        return _risk(apply_actions(current, remaining), criticality)
 
     def dfs(index: int, chosen: list[str], effort: float, current: dict[str, float]):
-        current_risk = _risk(current)
+        current_risk = _risk(current, criticality)
         if current_risk < best["risk_after"] - 1e-9 or (
             abs(current_risk - best["risk_after"]) <= 1e-9 and effort < best["effort"] - 1e-9
         ):
@@ -216,7 +224,11 @@ def exact_plan(
 
 
 def compare(
-    features: dict[str, float], *, budget: float, candidate_actions: list[str] | None = None
+    features: dict[str, float],
+    *,
+    budget: float,
+    candidate_actions: list[str] | None = None,
+    criticality: int | None = None,
 ) -> dict:
     """Run both methods and compute the measured optimality gap.
 
@@ -224,17 +236,26 @@ def compare(
         gap = (greedy_reduction - exact_reduction) / exact_reduction   (if >0 else 0)
     Greedy may have the SAME risk_after as exact (gap 0); it is still never
     labelled optimal.
+
+    ``criticality`` is the SAME asset-criticality context the risk engine used
+    for this run: the planner re-evaluates the real (importance-adjusted)
+    function, so ``initial_risk`` equals the run's score and risk_after values
+    are comparable with it.
     """
     import time
 
-    initial_risk = _risk(features)
+    initial_risk = _risk(features, criticality)
 
     start = time.perf_counter()
-    greedy = greedy_plan(features, budget=budget, candidate_actions=candidate_actions)
+    greedy = greedy_plan(
+        features, budget=budget, candidate_actions=candidate_actions, criticality=criticality
+    )
     greedy_ms = (time.perf_counter() - start) * 1000.0
 
     start = time.perf_counter()
-    exact = exact_plan(features, budget=budget, candidate_actions=candidate_actions)
+    exact = exact_plan(
+        features, budget=budget, candidate_actions=candidate_actions, criticality=criticality
+    )
     exact_ms = (time.perf_counter() - start) * 1000.0
 
     greedy_reduction = initial_risk - greedy["risk_after"]

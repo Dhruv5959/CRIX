@@ -73,8 +73,9 @@ the whole story without the running app.
 7. **Compromise propagation** — a defensive what-if with a documented exposure
    formula; relative prioritization, explicitly not a probability.
 8. **Live demo** — see §3 below.
-9. **How the risk engine works** — `risk = base + interaction − mitigation`;
-   non-additive compounding is the thesis.
+9. **How the risk engine works** — `risk = asset criticality × (base +
+   interaction) − mitigation`; non-additive compounding is the thesis, and the
+   company's own asset importance is a documented, bounded input.
 10. **Transparent attribution** — exact Shapley; contributions sum to the total.
 11. **Prioritization** — greedy **baseline** vs exact branch-and-bound; measured
     gap; a deliberately constructed greedy trap.
@@ -92,7 +93,7 @@ Do it in this exact order. Each step names the page and the *one thing to say*.
 - **Click:** log in as `demo@example.com` / `demo-password-123`.
 - **Say:** "This is a real account seeded with a realistic scenario — 22 security
   events across the connected accounts. CRIX collapses that into one contextual
-  risk score: **61.7, HIGH**, with a sensitivity range of **56–69**.
+  risk score: **67.9, HIGH**, with a sensitivity range of **62–76**.
   Notice it's a *relative prioritization*, not a probability."
 
 ### Step 2 — Connected Signals (`/signals`)
@@ -126,12 +127,13 @@ Do it in this exact order. Each step names the page and the *one thing to say*.
   matter, not the individual alerts."
 
 ### Step 5 — Risk & Attribution (`/risk`)
-- **Say:** "Here's *why* the score is 61.7. Base risk 48.5, plus **interaction
+- **Say:** "Here's *why* the score is 67.9. Base risk 48.5, plus **interaction
   risk 13.2** — that's the compounding: breach + reuse is worse than the sum of
-  its parts — minus mitigation credit 0. The waterfall shows each feature's exact
-  **Shapley** contribution, and they sum exactly to the total (efficiency error
-  ~3×10⁻⁹). This explains the *real* deterministic function; it is not a model
-  trained on CRIX's own labels."
+  its parts — scaled by **asset criticality ×1.1** because the findings hit a
+  level-4 company asset (+6.2), minus mitigation credit 0. The waterfall shows
+  each feature's exact **Shapley** contribution, and they sum exactly to the
+  total (efficiency error ~3×10⁻⁹). This explains the *real* deterministic
+  function; it is not a model trained on CRIX's own labels."
 
 ### Step 6 — Dependency Graph (`/graph`)
 - **Say:** "Accounts aren't independent. This is a curated, hand-verified
@@ -192,8 +194,9 @@ Do it in this exact order. Each step names the page and the *one thing to say*.
 
 | Claim | Value | Where it comes from |
 |---|---|---|
-| Demo contextual risk score | **61.7 / HIGH** | `seed_demo.py` on the real engine |
-| Score range (sensitivity) | **56–69** | risk sensitivity interval |
+| Demo contextual risk score | **67.9 / HIGH** | `seed_demo.py` on the real engine |
+| Score range (sensitivity) | **62–76** | risk sensitivity interval |
+| Demo asset-criticality term | **+6.2** (level 4 → ×1.1) | documented multiplier, `risk.py` |
 | Demo events | **22** | seeded scenario |
 | Demo correlations fired | **2** (0.85, 0.55) | correlation engine |
 | Phishing classifier F1 | **0.830** (P 1.00, R 0.71) | `run_evaluation.py` |

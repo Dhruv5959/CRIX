@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.engine import correlation, graph, graphrag, planner, risk, shapley
+from app.engine.entities import assert_asset_in_org
 from app.engine.normalizer import OrgScopeError, resolve_org_id, to_schema
 from app.models import (
     AssetDependency,
@@ -100,6 +101,94 @@ def _declared_asset_dependencies(db: Session, org_id: str | None) -> list[tuple[
     return [(org_id, row.from_asset_id, row.to_asset_id) for row in rows]
 
 
+def resolve_org_criticality(db: Session, org_id: str | None, events: list) -> tuple[int | None, dict]:
+    """Resolve the affected assets' criticality for one analysis run (Phase 4).
+
+    Organization-scoped by construction:
+
+    * Only findings (``status == FINDING``) that are BOUND to an asset are
+      considered — an unbound finding carries no asset importance, and that is
+      recorded as such.
+    * Every lookup goes through ``entities.assert_asset_in_org``, which filters
+      on ``org_id``: an asset id belonging to another tenant resolves to
+      ``None`` (rejected as a criticality input, never read cross-tenant), and
+      the rejection is listed explicitly in the returned context.
+    * The value used is the MAXIMUM criticality among the resolved assets — the
+      most important affected asset drives prioritization. Ties break on the
+      sorted asset id, so equal inputs always give the same answer.
+
+    Returns ``(criticality, asset_context)``. ``criticality`` is ``None`` when
+    nothing could be resolved (the score then stays unadjusted); the context is
+    JSON-safe traceability data merged into the score's components.
+    """
+    empty = {
+        "criticality_status": "UNBOUND",
+        "asset_ids": [],
+        "asset_criticalities": {},
+        "primary_asset_id": None,
+        "unresolved_assets": [],
+    }
+    if not org_id:
+        return None, {**empty, "criticality_status": "NO_ORGANIZATION"}
+
+    # Candidate assets: bound to a FINDING and written inside this organization.
+    in_org: set[str] = set()
+    foreign: set[str] = set()
+    for event in events:
+        # ``event.status`` may be an ``EventStatus`` member or a plain string
+        # (rows round-trip as strings); compare on the value either way.
+        status = getattr(event.status, "value", event.status)
+        if status != "FINDING" or not event.asset_id:
+            continue
+        if event.org_id == org_id:
+            in_org.add(event.asset_id)
+        else:
+            # A finding row that points outside the tenant: its asset reference
+            # is rejected as an input (fail-closed), and the rejection is shown.
+            foreign.add(event.asset_id)
+
+    resolved: dict[str, int] = {}
+    unresolved: list[dict] = []
+    for asset_id in sorted(foreign):
+        unresolved.append(
+            {"asset_id": asset_id, "reason": "finding_not_in_this_organization"}
+        )
+    for asset_id in sorted(in_org):
+        asset = assert_asset_in_org(db, org_id, asset_id)
+        if asset is None:
+            unresolved.append(
+                {"asset_id": asset_id, "reason": "not_a_registered_asset_in_this_organization"}
+            )
+        else:
+            resolved[asset.asset_id] = int(asset.criticality)
+
+    if not resolved and not unresolved:
+        return None, empty
+
+    if not resolved:
+        return None, {
+            **empty,
+            "criticality_status": "UNRESOLVED",
+            "unresolved_assets": unresolved,
+        }
+
+    # Most important affected asset wins; ties break on the sorted id.
+    primary = sorted(resolved.items(), key=lambda item: (-item[1], item[0]))[0][0]
+    return max(resolved.values()), {
+        "criticality_status": "REGISTERED",
+        "asset_ids": sorted(resolved),
+        "asset_criticalities": dict(sorted(resolved.items())),
+        "primary_asset_id": primary,
+        "unresolved_assets": unresolved,
+    }
+
+
+def resolve_run_criticality(db: Session, user_id: str, events: list) -> tuple[int | None, dict]:
+    """Same resolution for callers outside ``run_analysis`` (the propagation
+    simulation), resolving the caller's organization server-side first."""
+    return resolve_org_criticality(db, _resolve_org_or_none(db, user_id), events)
+
+
 def run_analysis(db: Session, user_id: str, *, persist: bool = True) -> dict:
     """Run the full pipeline and (optionally) persist the run's results."""
     run_id = uuid.uuid4().hex
@@ -110,15 +199,32 @@ def run_analysis(db: Session, user_id: str, *, persist: bool = True) -> dict:
         events,
         declared_asset_dependencies=_declared_asset_dependencies(db, org_id),
     )
-    risk_breakdown = risk.compute_risk(events)
+    # Asset criticality: resolved HERE, server-side, inside this organization.
+    criticality, asset_context = resolve_org_criticality(db, org_id, events)
+    risk_breakdown = risk.compute_risk(events, criticality=criticality)
     features = risk.extract_features(events)
-    attribution = shapley.attribute(features)
+    # Attribution and planner run on the SAME value function context, so every
+    # consumer of this run explains/optimizes the score that was actually shown.
+    attribution = shapley.attribute(features, criticality=criticality)
+    plan_comparison = planner.compare(features, budget=6.0, criticality=criticality)
 
-    # Planner comparison on the real feature vector (bounded action set).
-    plan_comparison = planner.compare(features, budget=6.0)
+    # Traceability (Phase 4 §3.5): what this score consumed and where it came
+    # from, stored beside the score itself.
+    risk_breakdown.components.update(asset_context)
+    risk_breakdown.components["org_id"] = org_id
+    risk_breakdown.components["correlations_consumed"] = {
+        "ids": [],
+        "note": (
+            "Grouped-link results never feed the score; interaction terms are "
+            "computed from the findings themselves (docs/RISK_MODEL.md)."
+        ),
+    }
 
     if persist:
-        _persist_run(db, user_id, run_id, correlations, risk_breakdown, attribution, plan_comparison)
+        _persist_run(
+            db, user_id, org_id, run_id, correlations, risk_breakdown,
+            attribution, plan_comparison,
+        )
 
     return {
         "run_id": run_id,
@@ -128,6 +234,7 @@ def run_analysis(db: Session, user_id: str, *, persist: bool = True) -> dict:
         "attribution": attribution,
         "planner": plan_comparison,
         "features": features,
+        "criticality": criticality,
         "generated_at": dt.datetime.now(dt.timezone.utc),
     }
 
@@ -191,12 +298,20 @@ def _persist_correlations(db, user_id, run_id, correlations) -> None:
             db.delete(row)
 
 
-def _persist_run(db, user_id, run_id, correlations, risk_breakdown, attribution, plan_comparison):
+def _persist_run(db, user_id, org_id, run_id, correlations, risk_breakdown, attribution, plan_comparison):
     _persist_correlations(db, user_id, run_id, correlations)
+    components = risk_breakdown.components
     db.add(
         RiskResult(
             user_id=user_id,
+            org_id=org_id,
             run_id=run_id,
+            # The most important affected asset (or None when no registered
+            # asset was bound) — the asset this score is primarily "about".
+            asset_id=components.get("primary_asset_id"),
+            # Which formula produced THIS row. Old rows keep their own version:
+            # a snapshot is inserted, never rewritten when the model changes.
+            model_version=components.get("model_version", risk.RISK_MODEL_VERSION),
             score=risk_breakdown.score,
             band=risk_breakdown.band,
             confidence=risk_breakdown.confidence,
@@ -204,8 +319,9 @@ def _persist_run(db, user_id, run_id, correlations, risk_breakdown, attribution,
             range_high=risk_breakdown.range_high,
             base_risk=risk_breakdown.base_risk,
             interaction_risk=risk_breakdown.interaction_risk,
+            criticality_adjustment=risk_breakdown.criticality_adjustment,
             mitigation_credit=risk_breakdown.mitigation_credit,
-            components=risk_breakdown.components,
+            components=components,
         )
     )
     db.add(

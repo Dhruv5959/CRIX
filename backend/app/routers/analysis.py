@@ -62,12 +62,18 @@ def _serialize(result: dict) -> dict:
             "range_high": risk_breakdown.range_high,
             "base_risk": risk_breakdown.base_risk,
             "interaction_risk": risk_breakdown.interaction_risk,
+            "criticality_adjustment": risk_breakdown.criticality_adjustment,
             "mitigation_credit": risk_breakdown.mitigation_credit,
+            # Which formula ran and with which asset-importance input — the
+            # score's own traceability, served next to the score (Phase 4).
+            "model_version": risk_breakdown.components.get("model_version"),
+            "criticality": risk_breakdown.components.get("criticality"),
             "components": risk_breakdown.components,
         },
         "attribution": result["attribution"],
         "planner": result["planner"],
         "features": result["features"],
+        "criticality": result.get("criticality"),
     }
 
 
@@ -136,6 +142,9 @@ def what_if(
     """
     base = pipeline.run_analysis(db, current_user.id, persist=False)
     features = dict(base["features"])
+    # Same asset-criticality context as the base run: a toggle changes what the
+    # company controls, never which asset this run is about.
+    criticality = base["criticality"]
 
     unknown = [t.action_key for t in payload.toggles if t.action_key not in planner.ACTIONS]
     if unknown:
@@ -153,15 +162,16 @@ def what_if(
         applied.append(toggle.action_key)
     modified = planner.apply_actions(features, applied)
 
-    score, breakdown = risk.risk_from_features(modified)
+    score, breakdown = risk.risk_from_features(modified, criticality=criticality)
     from app.engine.shapley import attribute
 
-    attribution = attribute(modified)
+    attribution = attribute(modified, criticality=criticality)
 
     events_for_confidence = base["events"]
-    low, high = risk.sensitivity_range(modified)
+    low, high = risk.sensitivity_range(modified, criticality=criticality)
     return {
         "applied_actions": applied,
+        "criticality": criticality,
         "before": {
             "score": base["risk"].score,
             "band": base["risk"].band,
@@ -175,6 +185,7 @@ def what_if(
             "range_high": high,
             "base_risk": breakdown["base_risk"],
             "interaction_risk": breakdown["interaction_risk"],
+            "criticality_adjustment": breakdown["criticality_adjustment"],
             "mitigation_credit": breakdown["mitigation_credit"],
             "attribution": attribution,
             "features": modified,

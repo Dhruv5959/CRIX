@@ -41,7 +41,7 @@ The `status` field on every event is one of `FINDING`, `CHECKED_SAFE`,
               Declarative correlation engine  (correlation_rules.yaml, 8 rules)
                             │
                             ▼
-              Contextual risk engine           risk = base + interaction − mitigation
+              Contextual risk engine    risk = m(c)×(base + interaction) − mitigation
                             │
                             ▼
               Exact Shapley attribution        Σ contributions == total (efficiency)
@@ -166,21 +166,33 @@ eight fire.
 ## 6. Contextual risk engine (`backend/app/engine/risk.py`)
 
 ```
-risk = clip(base_risk + interaction_risk − mitigation_credit, 0, 100)
+risk = clip( m(c) × (base_risk + interaction_risk) − mitigation_credit, 0, 100 )
+m(c) = 1 + 0.10 × (c − 3)          # asset criticality c ∈ 1..5 → m ∈ [0.8, 1.2]
 ```
 
 - **base_risk** = Σ `base_weight[feature] × intensity`, weights sum to 1.00.
 - **interaction_risk** = Σ pairwise `coefficient × f[a] × f[b]` — this is CRIX's
-  thesis (problems *compound*) made explicit and inspectable.
+  thesis (problems *compound*) made explicit and inspectable. Computed from the
+  findings themselves; grouped-link (correlation) results never feed the score.
+- **m(c) — asset criticality** (Phase 4) = the single documented way company
+  asset importance enters: the criticality (1–5) of the most important
+  registered asset affected by the findings scales the evidence-based exposure.
+  Neutral level 3 (the registration default) and *missing* criticality both give
+  `m = 1.0`; missing is recorded as an unknown input, never as "safe". Criticality
+  alone never creates risk — zero findings score 0 at every criticality.
 - **mitigation_credit** = credits for MFA/passkey, **discounted** when a session
   is exposed (a stolen session bypasses credential-based controls — mirroring the
   curated KG edge `session_hijacking --defeats--> passkey`) and capped at 45% of
-  pre-mitigation risk.
+  the (criticality-scaled) exposure.
 
-All parameters live in one `RISK_PARAMS` dict. Bands: `LOW <25 ≤ MODERATE
-<50 ≤ HIGH <75 ≤ CRITICAL`. The reported **range** is a bounded perturbation
-sensitivity interval (±5% per feature) — explicitly *not* a statistical
-confidence interval. A sensitivity test covers it.
+All parameters live in one `RISK_PARAMS` dict; the full specification — including
+the additive UI identity (`base + interaction + criticality_adjustment −
+mitigation`), traceability fields, out-of-range/missing-input handling and
+model versioning (`risk-1.0` → `risk-2.0`) — is in `docs/RISK_MODEL.md`.
+Bands: `LOW <25 ≤ MODERATE <50 ≤ HIGH <75 ≤ CRITICAL`. The reported **range**
+is a bounded perturbation sensitivity interval (±5% per feature, criticality
+held fixed) — explicitly *not* a statistical confidence interval. A sensitivity
+test covers it.
 
 ---
 
@@ -266,7 +278,7 @@ free-form invention.
 | `connected_signals` | user-declared accounts/assets |
 | `security_events` | the normalized event schema |
 | `correlations` | fired rule results per `run_id` |
-| `risk_results` | score + breakdown per `run_id` |
+| `risk_results` | score + breakdown per `run_id` (+ Phase 4 context: `org_id`, `asset_id`, `model_version`, `criticality_adjustment`) |
 | `attribution_results` | Shapley contributions per `run_id` |
 | `remediation_actions` | action catalog |
 | `remediation_plans` | greedy/exact plans per `run_id` |

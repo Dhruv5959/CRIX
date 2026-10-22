@@ -67,7 +67,7 @@
 | 2 | Signal modules A–D (breach, password, phishing ML, permissions) | ✅ **Done** |
 | 3 | SecurityEvent normalizer | ✅ **Done** |
 | 4 | Declarative correlation engine (8 YAML rules) | ✅ **Done** |
-| 5 | Contextual risk engine (base + interaction − mitigation) + sensitivity range | ✅ **Done** |
+| 5 | Contextual risk engine (criticality × (base + interaction) − mitigation) + sensitivity range | ✅ **Done** |
 | 6 | Exact Shapley attribution + efficiency test + timing benchmark | ✅ **Done** |
 | 7 | Account dependency graph (NetworkX, curated, centrality) | ✅ **Done** |
 | 8 | Remediation planner (greedy vs. exact branch-and-bound, greedy-trap) | ✅ **Done** |

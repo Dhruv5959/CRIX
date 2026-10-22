@@ -48,7 +48,7 @@ export default function RiskPage() {
           </CardHeader>
           <CardBody className="flex flex-col items-center gap-5">
             <RiskGauge score={risk.score} band={risk.band} rangeLow={risk.range_low} rangeHigh={risk.range_high} />
-            <div className="grid w-full grid-cols-3 gap-2 text-center">
+            <div className="grid w-full grid-cols-2 gap-2 text-center sm:grid-cols-4">
               <div>
                 <div className="label-eyebrow">Base</div>
                 <div className="font-mono text-sm text-ink">{formatNumber(risk.base_risk)}</div>
@@ -58,10 +58,25 @@ export default function RiskPage() {
                 <div className="font-mono text-sm text-ink">+{formatNumber(risk.interaction_risk)}</div>
               </div>
               <div>
+                <div className="label-eyebrow">Asset criticality</div>
+                <div className="font-mono text-sm text-ink">
+                  {risk.criticality_adjustment >= 0 ? "+" : "−"}
+                  {formatNumber(Math.abs(risk.criticality_adjustment))}
+                </div>
+              </div>
+              <div>
                 <div className="label-eyebrow">Mitigation</div>
                 <div className="font-mono text-sm text-ink">−{formatNumber(risk.mitigation_credit)}</div>
               </div>
             </div>
+            <p className="w-full text-center text-[11px] leading-relaxed text-ink-faint">
+              {risk.model_version ?? "unknown model"} · asset criticality{" "}
+              {risk.criticality == null ? "not bound (score unadjusted)" : `${risk.criticality} of 5`}
+              {" · "}
+              {risk.components.correlations_consumed
+                ? "grouped-link results are not score inputs"
+                : "score computed from findings only"}
+            </p>
           </CardBody>
         </Card>
 

@@ -312,6 +312,10 @@ export default function PropagationPage() {
                     [
                       ["base risk", result.scenario_risk.base_risk],
                       ["interaction risk", result.scenario_risk.interaction_risk],
+                      [
+                        "asset criticality",
+                        result.scenario_risk.criticality_adjustment ?? 0,
+                      ],
                       ["mitigation credit", -result.scenario_risk.mitigation_credit],
                     ] as Array<[string, number]>
                   ).map(([name, value]) => (

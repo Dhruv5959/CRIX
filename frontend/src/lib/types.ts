@@ -88,8 +88,30 @@ export interface RiskResult {
   range_high: number;
   base_risk: number;
   interaction_risk: number;
+  /** Additive asset-criticality term (Phase 4); 0.0 when unadjusted. */
+  criticality_adjustment: number;
   mitigation_credit: number;
-  components: { features: Record<string, number> };
+  /** Which formula produced this score, e.g. "risk-2.0". */
+  model_version: string | null;
+  /** Affected asset importance (1..5) the server resolved, or null. */
+  criticality: number | null;
+  components: {
+    features: Record<string, number>;
+    model_version?: string;
+    criticality?: number | null;
+    criticality_multiplier?: number;
+    criticality_status?: string;
+    asset_ids?: string[];
+    asset_criticalities?: Record<string, number>;
+    primary_asset_id?: string | null;
+    unresolved_assets?: Array<{ asset_id: string; reason: string }>;
+    finding_ids?: string[];
+    interaction_terms?: Array<{ pair: string[]; coefficient: number; value: number }>;
+    unavailable_inputs?: Array<{ event_id: string; event_type: string; status: string }>;
+    uncertainty?: string[];
+    org_id?: string | null;
+    correlations_consumed?: { ids: string[]; note: string };
+  };
 }
 
 export interface Attribution {
@@ -180,6 +202,8 @@ export interface PhishingResult {
 
 export interface WhatIfResult {
   applied_actions: string[];
+  /** The same asset criticality the base run used (server-resolved). */
+  criticality: number | null;
   before: { score: number; band: string; attribution: Attribution };
   after: {
     score: number;
@@ -189,6 +213,7 @@ export interface WhatIfResult {
     range_high: number;
     base_risk: number;
     interaction_risk: number;
+    criticality_adjustment: number;
     mitigation_credit: number;
     attribution: Attribution;
     features: Record<string, number>;
@@ -336,7 +361,10 @@ export interface SimulationResult {
     range_high: number;
     base_risk: number;
     interaction_risk: number;
+    criticality_adjustment: number;
     mitigation_credit: number;
+    criticality: number | null;
+    model_version: string;
   };
   scenario_attribution: Attribution;
   scenario_plan: {
