@@ -78,6 +78,15 @@ class Settings(BaseSettings):
     # quota from one client hammering the API.
     breach_check_rate_limit_per_minute: int = 10
 
+    # --- Risk model (Phase 6b) ------------------------------------------------
+    # The DependencyExposure term adds the org dependency graph's documented
+    # blast radius to the contextual score (docs/RISK_MODEL.md §1.3). Default
+    # ON; set to false to ABLATE the term (evaluation ablation runs, and any
+    # operator who wants the pure Phase 4/6b-without-graph formula). The status
+    # is recorded on every score as DISABLED, so an ablated run is never
+    # mistaken for a run that found no exposure.
+    risk_dependency_exposure_enabled: bool = True
+
     # --- OAuth providers (live account connections) — FROZEN (§1.4) ---
     # CRIX-SMB does NOT connect to third-party providers. The connectors stay in
     # the codebase behind this flag, but it defaults to OFF *in code* (not just

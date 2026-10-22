@@ -51,14 +51,21 @@ DOC_MITIGATION_WEIGHTS = {"passkey": 0.20, "mfa": 0.12}
 DOC_SESSION_DISCOUNT = 0.70
 DOC_MITIGATION_CAP = 0.45
 DOC_CRITICALITY = {"min": 1, "max": 5, "neutral": 3, "step_per_level": 0.10}
-DOC_MODEL_VERSION = "risk-2.0"
+# Phase 6b: the documented DependencyExposure term (docs/RISK_MODEL.md §1.3).
+# points = 100 * weight * intensity, added OUTSIDE the criticality multiplier.
+DOC_DEPENDENCY_EXPOSURE = {"weight": 0.08, "saturation": 4.0}
+# risk-2.0 rows existed before the dependency term; risk-1.0 before criticality.
+# Snapshots always keep the version of the formula that produced them.
+DOC_MODEL_VERSION = "risk-2.1"
 
 
 def expected_score(features: dict, criticality: int | None = None) -> float:
     """The documented formula, computed from the literals above only.
 
-    risk = clip( m(c) * (base + interaction) - mitigation, 0, 100 )
-    m(c) = 1 + 0.10 * (c - 3);  mitigation = min(raw, 0.45 * scaled exposure)
+    risk = clip( m(c) * (base + interaction) + dependency_exposure
+                 - mitigation, 0, 100 )
+    m(c) = 1 + 0.10 * (c - 3);  mitigation = min(raw, 0.45 * pre-mitigation)
+    dependency_exposure = 100 * 0.08 * features["dependency_exposure"] (0 if absent)
     """
     f = {name: float(features.get(name, 0.0)) for name in DOC_BASE_WEIGHTS}
     base = 100.0 * sum(DOC_BASE_WEIGHTS[name] * f[name] for name in DOC_BASE_WEIGHTS)
@@ -70,18 +77,29 @@ def expected_score(features: dict, criticality: int | None = None) -> float:
         if criticality is None
         else 1.0 + DOC_CRITICALITY["step_per_level"] * (criticality - DOC_CRITICALITY["neutral"])
     )
-    exposure = multiplier * (base + interaction)
+    # The term's points are rounded to 4 decimals exactly like the engine's
+    # documented breakdown, so this literal formula reproduces it bit-for-bit.
+    dependency = round(
+        100.0 * DOC_DEPENDENCY_EXPOSURE["weight"]
+        * float(features.get("dependency_exposure", 0.0)),
+        4,
+    )
+    pre_mitigation = multiplier * (base + interaction) + dependency
     discount = 1.0 - DOC_SESSION_DISCOUNT * f.get("session", 0.0)
     raw_credit = 100.0 * sum(
         DOC_MITIGATION_WEIGHTS[name] * float(features.get(name, 0.0))
         for name in DOC_MITIGATION_WEIGHTS
     ) * max(0.0, discount)
-    credit = min(raw_credit, DOC_MITIGATION_CAP * exposure)
-    return round(max(0.0, min(100.0, exposure - credit)), 4)
+    credit = min(raw_credit, DOC_MITIGATION_CAP * pre_mitigation)
+    return round(max(0.0, min(100.0, pre_mitigation - credit)), 4)
 
 
 def expected_adjustment(features: dict, criticality: int | None) -> float:
-    """criticality_adjustment = (m(c) - 1) * (base + interaction)."""
+    """criticality_adjustment = (m(c) - 1) * (base + interaction).
+
+    The dependency term sits OUTSIDE the multiplier, so it never enters the
+    adjustment (docs/RISK_MODEL.md §1).
+    """
     f = {name: float(features.get(name, 0.0)) for name in DOC_BASE_WEIGHTS}
     base = 100.0 * sum(DOC_BASE_WEIGHTS[name] * f[name] for name in DOC_BASE_WEIGHTS)
     interaction = 100.0 * sum(
@@ -93,6 +111,16 @@ def expected_adjustment(features: dict, criticality: int | None) -> float:
         criticality - DOC_CRITICALITY["neutral"]
     )
     return round((multiplier - 1.0) * (base + interaction), 4)
+
+
+def expected_dependency_points(features: dict) -> float:
+    """The documented Phase 6b term: 100 * weight * intensity (0 if absent)."""
+    return round(
+        100.0
+        * DOC_DEPENDENCY_EXPOSURE["weight"]
+        * float(features.get("dependency_exposure", 0.0)),
+        4,
+    )
 
 
 def _features(**overrides) -> dict:
@@ -127,6 +155,13 @@ def test_documented_parameters_are_exactly_what_the_engine_uses():
     assert risk.RISK_PARAMS["session_mitigation_discount"] == DOC_SESSION_DISCOUNT
     assert risk.RISK_PARAMS["max_mitigation_credit"] == DOC_MITIGATION_CAP
     assert risk.RISK_PARAMS["criticality"] == DOC_CRITICALITY
+    # Phase 6b: the dependency term is documented here exactly as in the code.
+    # Its weight (0.08) deliberately mirrors the mid-tier evidence groups
+    # (permissions / dependency / sim_swap) and stays below the heavy ones —
+    # even a saturated graph contributes less than a top-weighted finding.
+    assert risk.RISK_PARAMS["dependency_exposure"] == DOC_DEPENDENCY_EXPOSURE
+    assert DOC_DEPENDENCY_EXPOSURE["weight"] == DOC_BASE_WEIGHTS["dependency"]
+    assert DOC_DEPENDENCY_EXPOSURE["weight"] < DOC_BASE_WEIGHTS["breach"]
     assert risk.RISK_MODEL_VERSION == DOC_MODEL_VERSION
 
 
@@ -523,7 +558,17 @@ def test_run_analysis_stamps_one_criticality_context_on_every_consumer(db_sessio
     assert "never feed the score" in components["correlations_consumed"]["note"]
 
 
-def test_a_declared_dependency_edge_changes_correlations_but_never_the_score(db_session):
+def test_a_declared_dependency_edge_moves_the_score_by_exactly_the_documented_term(db_session):
+    """Phase 6b: a declared edge feeds ONLY the documented DependencyExposure term.
+
+    Pre-6b this test pinned that the formula consumed no graph data at all.
+    Phase 6b (docs/RISK_MODEL.md §1.3) deliberately wires the org graph into
+    the score as one bounded, additive term — so the sharpened guarantees are:
+    the score moves by EXACTLY that term, the independent documented formula
+    (this file's literals, never engine output) reproduces the new score from
+    the features the engine scored with, and grouped-link results are still
+    consumed by nothing.
+    """
     user_id = "user-1"
     org_id = seed_org_for_user(db_session, user_id)
     _register_asset(db_session, org_id, "alice@company.example", 4)
@@ -548,9 +593,23 @@ def test_a_declared_dependency_edge_changes_correlations_but_never_the_score(db_
     before_rules = {c.rule_id for c in before["correlations"]}
     after_rules = {c.rule_id for c in after["correlations"]}
     assert after_rules >= before_rules
-    # ...but the score is identical: the formula does not consume edges.
-    assert after["risk"].score == before["risk"].score
+
+    # ...and it raises the DependencyExposure term from an evaluated 0 to the
+    # documented value, moving the score by exactly those points (findings and
+    # criticality are unchanged, so nothing else can move).
+    assert before["risk"].dependency_exposure == 0.0
+    assert after["features"][risk.DEPENDENCY_EXPOSURE_FEATURE] > 0.0
+    assert after["risk"].dependency_exposure > 0.0
+    assert (
+        after["risk"].score - before["risk"].score
+        == pytest.approx(after["risk"].dependency_exposure)
+    )
+
+    # The independent documented formula reproduces the new score from the
+    # features the engine actually scored with.
     assert after["risk"].score == pytest.approx(expected_score(after["features"], 4))
+    # Grouped-link results are still consumed by NOTHING in the score.
+    assert after["risk"].components["correlations_consumed"]["ids"] == []
 
 
 def test_risk_snapshots_are_org_scoped_and_keep_their_model_version(db_session):
@@ -642,10 +701,20 @@ def test_analysis_api_exposes_the_traceable_risk_contract(client, analysis_setup
     for key in ("features", "finding_ids", "interaction_terms", "uncertainty",
                 "unavailable_inputs", "criticality_status", "asset_ids",
                 "asset_criticalities", "primary_asset_id", "org_id",
-                "correlations_consumed", "criticality_multiplier"):
+                "correlations_consumed", "criticality_multiplier",
+                "dependency_exposure"):
         assert key in components, key
     assert components["org_id"] == org_id
     assert components["criticality_status"] == "REGISTERED"
+    # Phase 6b graph context is visible next to the score: this org's asset has
+    # no declared relationships, so the term evaluated to 0 with a status —
+    # an evaluated zero, never an unevaluated one.
+    dep_ctx = components["dependency_exposure"]
+    assert dep_ctx["status"] == "AVAILABLE"
+    assert dep_ctx["intensity"] == pytest.approx(0.0)
+    assert dep_ctx["points"] == pytest.approx(0.0)
+    assert dep_ctx["graph"]["edges"] == 0
+    assert dep_ctx["note"], "the graph context must explain itself"
 
     # The score itself is derived, not asserted from a recorded number.
     expected = expected_score(body["features"], criticality=4)
@@ -653,9 +722,13 @@ def test_analysis_api_exposes_the_traceable_risk_contract(client, analysis_setup
     assert risk_block["criticality_adjustment"] == pytest.approx(
         expected_adjustment(body["features"], 4)
     )
+    assert risk_block["dependency_exposure"] == pytest.approx(
+        expected_dependency_points(body["features"])
+    )
     composition = (
         risk_block["base_risk"] + risk_block["interaction_risk"]
-        + risk_block["criticality_adjustment"] - risk_block["mitigation_credit"]
+        + risk_block["criticality_adjustment"]
+        + risk_block["dependency_exposure"] - risk_block["mitigation_credit"]
     )
     assert composition == pytest.approx(risk_block["score"])
     assert risk_block["range_low"] <= risk_block["score"] <= risk_block["range_high"]

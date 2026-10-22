@@ -91,9 +91,9 @@ Do it in this exact order. Each step names the page and the *one thing to say*.
 
 ### Step 1 — Login page → Overview
 - **Click:** log in as `demo@example.com` / `demo-password-123`.
-- **Say:** "This is a real account seeded with a realistic scenario — 22 security
+- **Say:** "This is a real account seeded with a realistic scenario — 23 security
   events across the connected accounts. CRIX collapses that into one contextual
-  risk score: **67.9, HIGH**, with a sensitivity range of **62–76**.
+  risk score: **69.5, HIGH**, with a sensitivity range of **63–78**.
   Notice it's a *relative prioritization*, not a probability."
 
 ### Step 2 — Connected Signals (`/signals`)
@@ -127,12 +127,14 @@ Do it in this exact order. Each step names the page and the *one thing to say*.
   matter, not the individual alerts."
 
 ### Step 5 — Risk & Attribution (`/risk`)
-- **Say:** "Here's *why* the score is 67.9. Base risk 48.5, plus **interaction
+- **Say:** "Here's *why* the score is 69.5. Base risk 48.5, plus **interaction
   risk 13.2** — that's the compounding: breach + reuse is worse than the sum of
   its parts — scaled by **asset criticality ×1.1** because the findings hit a
-  level-4 company asset (+6.2), minus mitigation credit 0. The waterfall shows
+  level-4 company asset (+6.2), plus **1.6 from the organization's dependency
+  graph** — the level-5 repository this account can reach is worth accounting
+  for — minus mitigation credit 0. The waterfall shows
   each feature's exact **Shapley** contribution, and they sum exactly to the
-  total (efficiency error ~3×10⁻⁹). This explains the *real* deterministic
+  total (efficiency error ~2×10⁻⁹). This explains the *real* deterministic
   function; it is not a model trained on CRIX's own labels."
 
 ### Step 6 — Dependency Graph (`/graph`)
@@ -194,20 +196,21 @@ Do it in this exact order. Each step names the page and the *one thing to say*.
 
 | Claim | Value | Where it comes from |
 |---|---|---|
-| Demo contextual risk score | **67.9 / HIGH** | `seed_demo.py` on the real engine |
-| Score range (sensitivity) | **62–76** | risk sensitivity interval |
+| Demo contextual risk score | **69.5 / HIGH** | `seed_demo.py` on the real engine |
+| Score range (sensitivity) | **63–78** | risk sensitivity interval |
 | Demo asset-criticality term | **+6.2** (level 4 → ×1.1) | documented multiplier, `risk.py` |
-| Demo events | **22** | seeded scenario |
+| Demo dependency-exposure term | **+1.6** (level-5 repo, 1 hop → d=0.2) | documented graph term, `risk.py` §1.3 |
+| Demo events | **23** | seeded scenario |
 | Demo correlations fired | **2** (0.85, 0.55) | correlation engine |
 | Phishing classifier F1 | **0.830** (P 1.00, R 0.71) | `run_evaluation.py` |
 | AI-text detector F1 | **0.809** | `run_evaluation.py` |
 | Planner mean optimality gap | **0.0686** | `run_evaluation.py` |
 | Greedy traps observed | **2** | `run_evaluation.py` |
-| Shapley max efficiency error | **3.0×10⁻⁹** | `run_evaluation.py` |
-| Shapley mean compute time | **~69 ms** (12 features) | `run_evaluation.py` |
+| Shapley max efficiency error | **2.0×10⁻⁹** | `run_evaluation.py` |
+| Shapley mean compute time | **~100 ms** (13 features) | `run_evaluation.py` |
 | Correlation rules exercised | **8 / 8** | `run_evaluation.py` |
-| Backend tests passing | **123** (92 original + 31 new) | `pytest` |
-| Frontend tests passing | **6** | `vitest` |
+| Backend tests passing | **403** | `pytest` |
+| Frontend tests passing | **31** | `vitest` |
 | End-to-end smoke checks | **54 / 54 green** | `scripts/smoke.py` |
 | Propagation formula factors | **5** (dependency × criticality × weakness × path − mitigation) | `engine/propagation.py` `PROPAGATION_PARAMS` |
 | `source_mode` values | **5** (`REAL` / `USER_PROVIDED` / `SIMULATED` / `FIXTURE` / `UNAVAILABLE`) | `schemas.SourceMode` |
@@ -260,7 +263,7 @@ range (56–69 here). The contribution isn't the weights' precision — it's the
 inspectable, non-additive structure and the attribution.
 
 **Q: Why is Shapley exact and not `shap`?**
-A: With ≤12 features, exact enumeration over 2ⁿ subsets is fast (~69 ms) and
+A: With 13 features, exact enumeration over 2ⁿ subsets is fast (~100 ms) and
 guarantees the efficiency property exactly. The authoritative path uses no
 sampling; a seeded approximation exists only as a labelled teaching aid, never
 as the authority.

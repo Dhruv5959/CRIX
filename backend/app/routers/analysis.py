@@ -63,6 +63,10 @@ def _serialize(result: dict) -> dict:
             "base_risk": risk_breakdown.base_risk,
             "interaction_risk": risk_breakdown.interaction_risk,
             "criticality_adjustment": risk_breakdown.criticality_adjustment,
+            # Phase 6b additive graph term — shown as its own row so the
+            # additive identity (base + interaction + adjustment +
+            # dependency_exposure − mitigation = score) stays exactly visible.
+            "dependency_exposure": risk_breakdown.dependency_exposure,
             "mitigation_credit": risk_breakdown.mitigation_credit,
             # Which formula ran and with which asset-importance input — the
             # score's own traceability, served next to the score (Phase 4).

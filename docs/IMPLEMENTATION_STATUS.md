@@ -131,9 +131,9 @@ hand-entered.
 | AI-text detector F1 | **0.809** | Trained on self-generated synthetic AI phishing text. |
 | Planner mean optimality gap | **0.0686** | Exact branch-and-bound vs. greedy baseline across generated scenarios. |
 | Planner greedy traps observed | **2** | Scenarios where greedy is strictly sub-optimal (exact never worse). |
-| Shapley max efficiency error | **3.00e-09** | Σ contributions − total, exact enumeration. |
-| Shapley mean runtime | **~69 ms** | Per-evaluation timing benchmark. |
-| Demo contextual risk score | **67.9 (HIGH)** | Seed demo; base 48.5 + interaction 13.2 + criticality 6.17; Shapley sum = total (err 0.0). |
+| Shapley max efficiency error | **2.00e-09** | Σ contributions − total, exact enumeration (13 features, re-measured in Phase 6b). |
+| Shapley mean runtime | **~100 ms** | Per-evaluation timing benchmark (13 features; ~69 ms when the game had 12). |
+| Demo contextual risk score | **69.5 (HIGH)** | Seed demo; base 48.5 + interaction 13.2 + criticality 6.17 + dependency exposure 1.6; Shapley sum = total (err 0.0). |
 | Attribution authority | **exact only** | Seeded approximation exists (`is_exact=false`) as a labelled teaching aid; pipeline never uses it. |
 | Correlation rules exercised | **8 / 8** | One test per rule. |
 

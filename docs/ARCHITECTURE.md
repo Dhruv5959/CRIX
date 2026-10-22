@@ -186,9 +186,9 @@ m(c) = 1 + 0.10 × (c − 3)          # asset criticality c ∈ 1..5 → m ∈ [
   the (criticality-scaled) exposure.
 
 All parameters live in one `RISK_PARAMS` dict; the full specification — including
-the additive UI identity (`base + interaction + criticality_adjustment −
-mitigation`), traceability fields, out-of-range/missing-input handling and
-model versioning (`risk-1.0` → `risk-2.0`) — is in `docs/RISK_MODEL.md`.
+the additive UI identity (`base + interaction + criticality_adjustment +
+dependency_exposure − mitigation`), traceability fields, out-of-range/missing-input handling and
+model versioning (`risk-1.0` → `risk-2.0` → `risk-2.1`) — is in `docs/RISK_MODEL.md`.
 Bands: `LOW <25 ≤ MODERATE <50 ≤ HIGH <75 ≤ CRITICAL`. The reported **range**
 is a bounded perturbation sensitivity interval (±5% per feature, criticality
 held fixed) — explicitly *not* a statistical confidence interval. A sensitivity

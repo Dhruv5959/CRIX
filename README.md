@@ -307,8 +307,8 @@ These are produced by the harness on its own test data — not borrowed numbers.
 - **Remediation planner**: mean optimality gap of greedy vs. exact ≈ 6–7% across
   the scenario suite, with at least one **deliberately constructed greedy trap**
   where greedy is strictly worse than exact.
-- **Exact Shapley**: efficiency error within ~3e-9 over the tested feature
-  vectors; mean compute time ≈ 70 ms for 12 features on the dev machine.
+- **Exact Shapley**: efficiency error within ~2e-9 over the tested feature
+  vectors; mean compute time ≈ 100 ms for 13 features on the dev machine.
 
 > The ML corpus is synthetic and clearly labeled. Reported scores measure
 > generalization to unseen *templates within a synthetic distribution* — they

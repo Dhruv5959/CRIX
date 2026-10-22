@@ -45,7 +45,7 @@ import pytest
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 
-from app.engine import normalizer, org_graph, pipeline
+from app.engine import normalizer, org_graph, pipeline, risk
 from app.engine.org_graph import (
     CRITICAL_CRITICALITY,
     DISCLAIMER,
@@ -1016,6 +1016,16 @@ def test_schema_constraints_persist_without_a_phase6_migration(db_session):
 # 24. Phase 4 risk-input compatibility
 # --------------------------------------------------------------------------- #
 def test_phase4_risk_inputs_are_unchanged_by_graph_operations(db_session):
+    """Graph *queries* never change the score; graph *data* feeds the 6b term.
+
+    Phase 6 §5.9 kept traversal read-only. Phase 6b deliberately wired the
+    organization's declared relationships into the score as the documented
+    DependencyExposure term (docs/RISK_MODEL.md §1.3) — so what must hold is
+    the sharper property: RUNNING the operations changes nothing, because both
+    analyses below see the same rows. The final block is the 6b positive
+    control: a NEW documented relationship moves the score through the
+    documented term and nothing else.
+    """
     user_id = "user-1"
     org_id = seed_org_for_user(db_session, user_id)
     _asset(db_session, org_id, "risk@acme.example", "WORK_EMAIL", 4)
@@ -1026,26 +1036,45 @@ def test_phase4_risk_inputs_are_unchanged_by_graph_operations(db_session):
            event_id="evt_graph_mfa", user_id=user_id),
     ])
 
+    # Relationships exist BEFORE both analyses, so the data is identical.
+    # (HAS_ACCESS_TO is forward-exposure: from risk@acme.example the CI system
+    # is reachable, and from there the repository via DEPLOYS_TO.)
+    _asset(db_session, org_id, "ci@acme.example", "CI_SYSTEM", 5)
+    _edge(db_session, org_id, "risk@acme.example", "ci@acme.example", "HAS_ACCESS_TO")
+
     before = pipeline.run_analysis(db_session, user_id, persist=False)
 
-    # Declare relationships, then exercise every graph operation.
-    _edge(db_session, org_id, "risk@acme.example", "ci@acme.example", "USES")
-    _asset(db_session, org_id, "ci@acme.example", "CI_SYSTEM", 5)
-    _edge(db_session, org_id, "ci@acme.example", "repo@acme.example", "DEPLOYS_TO")
-    _asset(db_session, org_id, "repo@acme.example", "CODE_REPOSITORY", 5)
+    # Exercise every graph operation between the two analyses.
     graph, _ = org_graph.build_org_graph(db_session, org_id)
     org_graph.direct_neighbors(graph, "risk@acme.example")
     org_graph.reachable(graph, "risk@acme.example")
-    org_graph.paths_between(graph, "risk@acme.example", "repo@acme.example")
+    org_graph.paths_between(graph, "risk@acme.example", "ci@acme.example")
     org_graph.blast_radius(graph, "risk@acme.example")
     org_graph.critical_exposure(graph)
 
     after = pipeline.run_analysis(db_session, user_id, persist=False)
 
-    # The graph never changes the authoritative score or its inputs.
+    # Traversal is read-only: the authoritative score and its inputs are identical.
     assert after["risk"].score == before["risk"].score
     assert after["features"] == before["features"]
     assert after["criticality"] == before["criticality"]
+
+    # 6b positive control: adding a documented relationship raises the
+    # DependencyExposure intensity, and the score moves by exactly the
+    # documented points (findings, criticality and mitigation are unchanged).
+    _asset(db_session, org_id, "repo@acme.example", "CODE_REPOSITORY", 5)
+    _edge(db_session, org_id, "ci@acme.example", "repo@acme.example", "DEPLOYS_TO")
+    wired = pipeline.run_analysis(db_session, user_id, persist=False)
+
+    assert wired["features"][risk.DEPENDENCY_EXPOSURE_FEATURE] > 0.0
+    assert wired["risk"].dependency_exposure > after["risk"].dependency_exposure
+    assert wired["risk"].score > after["risk"].score
+    assert (
+        wired["risk"].score - after["risk"].score
+        == pytest.approx(
+            wired["risk"].dependency_exposure - after["risk"].dependency_exposure
+        )
+    )
 
 
 def test_org_graph_module_never_imports_the_risk_or_attribution_engines():
@@ -1059,6 +1088,9 @@ def test_org_graph_module_never_imports_the_risk_or_attribution_engines():
 # 25. Phase 5 attribution compatibility
 # --------------------------------------------------------------------------- #
 def test_phase5_attribution_is_unchanged_by_graph_operations(db_session):
+    """Attribution still explains the authoritative score — including the 6b
+    graph term, which is a documented PLAYER (a normal feature intensity),
+    never a raw graph structure."""
     user_id = "user-1"
     org_id = seed_org_for_user(db_session, user_id)
     _asset(db_session, org_id, "attr@acme.example", "WORK_EMAIL", 4)
@@ -1081,10 +1113,16 @@ def test_phase5_attribution_is_unchanged_by_graph_operations(db_session):
     # The cooperative-game attribution still sums to the authoritative score.
     assert attribution["total_risk"] == pytest.approx(result["risk"].score)
     assert attribution["efficiency_error"] < 1e-6
-    # Graph relationships are not attribution players: the game is unchanged.
-    player_names = {
-        player.get("name") or player.get("player")
-        for player in attribution.get("players", [])
-    }
-    assert "org_graph" not in player_names
-    assert not any("graph" in str(name).lower() for name in player_names if name)
+
+    contributions = attribution["contributions"]
+    # The graph's contribution is the DOCUMENTED dependency-exposure factor,
+    # and with no mitigation/clipping it is exactly the documented points.
+    assert risk.DEPENDENCY_EXPOSURE_FEATURE in contributions
+    assert contributions[risk.DEPENDENCY_EXPOSURE_FEATURE] > 0.0
+    assert contributions[risk.DEPENDENCY_EXPOSURE_FEATURE] == pytest.approx(
+        result["risk"].dependency_exposure
+    )
+    # No raw graph structure is ever a player: the graph itself, relationship
+    # ids and paths stay evidence, not factors.
+    assert "org_graph" not in contributions
+    assert not any("graph" in str(name).lower() for name in contributions)

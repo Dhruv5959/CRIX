@@ -106,6 +106,18 @@ def simulate(
         db, current_user.id, schemas
     )
 
+    # Phase 6b: the SAME dependency-graph input the real run scores with, so
+    # the scenario risk and both plans are computed with the identical
+    # risk-2.1 formula (the scenario changes evidence, not which asset the run
+    # is about or how the graph is read).
+    _dep_context = pipeline.resolve_run_dependency_exposure(
+        db, current_user.id, _asset_context
+    )
+    pipeline.apply_dependency_feature(scenario_features, _dep_context)
+    base_features = pipeline.apply_dependency_feature(
+        risk.extract_features(schemas), _dep_context
+    )
+
     # A simulated compromise of a recovery-capable account raises exposure on
     # its dependency chain. We model it as full session+identity exposure on the
     # upstream account (documented, deterministic, SIMULATED).
@@ -119,9 +131,7 @@ def simulate(
     # Remediation priority under the scenario: the SAME planner (greedy baseline
     # vs. one exact branch-and-bound), re-run on the scenario's feature vector.
     scenario_plan = planner.compare(scenario_features, budget=6.0, criticality=criticality)
-    base_plan = planner.compare(
-        risk.extract_features(schemas), budget=6.0, criticality=criticality
-    )
+    base_plan = planner.compare(base_features, budget=6.0, criticality=criticality)
 
     # Persist the (optional) simulation record for the Evaluation/audit trail.
     run_id = uuid.uuid4().hex
@@ -165,6 +175,7 @@ def simulate(
             "base_risk": breakdown["base_risk"],
             "interaction_risk": breakdown["interaction_risk"],
             "criticality_adjustment": breakdown["criticality_adjustment"],
+            "dependency_exposure": breakdown["dependency_exposure"],
             "mitigation_credit": breakdown["mitigation_credit"],
             "criticality": criticality,
             "model_version": risk.RISK_MODEL_VERSION,

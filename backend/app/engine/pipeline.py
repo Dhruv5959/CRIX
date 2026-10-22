@@ -15,7 +15,8 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.engine import correlation, graph, graphrag, planner, risk, shapley
+from app.config import get_settings
+from app.engine import correlation, graph, graphrag, org_graph, planner, risk, shapley
 from app.engine.entities import assert_asset_in_org
 from app.engine.normalizer import OrgScopeError, resolve_org_id, to_schema
 from app.models import (
@@ -189,6 +190,200 @@ def resolve_run_criticality(db: Session, user_id: str, events: list) -> tuple[in
     return resolve_org_criticality(db, _resolve_org_or_none(db, user_id), events)
 
 
+# --------------------------------------------------------------------------- #
+# Phase 6b — DependencyExposure: the org graph's contribution to the score
+# --------------------------------------------------------------------------- #
+def resolve_org_dependency_exposure(
+    db: Session, org_id: str | None, asset_context: dict
+) -> dict:
+    """Resolve the documented DependencyExposure input for one analysis run.
+
+    Server-side, organization-scoped, documented edges only (Rule §4, §6b):
+
+    * Reads the caller's own graph via ``org_graph.build_org_graph`` (every
+      query filters on ``org_id``; edges are the org's admin-declared
+      ``AssetDependency`` rows restricted to documented relationship types).
+      An edge from another tenant can never enter the input.
+    * Runs the Phase 6 ``blast_radius`` query from the run's **primary
+      affected asset** (the criticality resolution's server-side pick), with
+      the documented default depth bound (``GRAPH_LIMITS["default_depth"]``).
+    * Intensity ``d = raw / (raw + saturation)`` where
+      ``raw = Σ ((criticality − 1) / 4) × (1 / depth)`` over reachable assets —
+      criticality-weighted, depth-decayed, saturating, hence always in
+      ``[0, 1)``. Points are ``100 × weight × d`` (bounded, see
+      ``RISK_PARAMS["dependency_exposure"]``).
+
+    Statuses (never coerced, never silently zeroed as if safe):
+
+    ``AVAILABLE``          graph read + blast radius computed (``intensity`` set)
+    ``NO_AFFECTED_ASSET``  no registered asset bound to this run's findings
+    ``NO_ORGANIZATION``    the run has no org context (graph cannot be read)
+    ``UNAVAILABLE``        graph build failed (e.g. ``GraphTooLargeError``)
+    ``DISABLED``           config flag off — the term is excluded on purpose
+
+    The returned dict is JSON-safe traceability merged into the score's
+    ``components["dependency_exposure"]``.
+    """
+    weight = risk.RISK_PARAMS["dependency_exposure"]["weight"]
+    saturation = risk.RISK_PARAMS["dependency_exposure"]["saturation"]
+    formula = (
+        "d = raw / (raw + saturation); "
+        "raw = sum over blast-radius assets of ((criticality - 1) / 4) * (1 / depth); "
+        "points = 100 * weight * d"
+    )
+    base_ctx: dict = {
+        "source": "org_graph.blast_radius",
+        "formula": formula,
+        "weight": weight,
+        "saturation": saturation,
+        "intensity": None,
+        "points": 0.0,
+        "primary_asset_id": None,
+        "reachable_count": 0,
+        "critical_count": 0,
+        "depth_used": org_graph.GRAPH_LIMITS["default_depth"],
+        "truncated": False,
+        "graph": {"nodes": 0, "edges": 0, "edges_provenance": "ADMIN_DECLARED"},
+        "disclaimer": org_graph.DISCLAIMER,
+    }
+
+    if not get_settings().risk_dependency_exposure_enabled:
+        return {
+            **base_ctx,
+            "status": "DISABLED",
+            "note": (
+                "The dependency-exposure term is disabled by configuration "
+                "(ablation); the score excludes it on purpose — this is a "
+                "configuration state, not an absence of exposure."
+            ),
+        }
+
+    if not org_id:
+        return {
+            **base_ctx,
+            "status": "NO_ORGANIZATION",
+            "note": (
+                "No organization context, so no dependency graph could be "
+                "read; the term is 0 and this is an unknown input, not an "
+                "absence of exposure."
+            ),
+        }
+
+    primary = asset_context.get("primary_asset_id")
+    if not primary:
+        return {
+            **base_ctx,
+            "status": "NO_AFFECTED_ASSET",
+            "note": (
+                "No registered asset was bound to this run's findings, so "
+                "there was no affected asset to reason from; the term is 0 "
+                "for this run."
+            ),
+        }
+
+    depth = org_graph.GRAPH_LIMITS["default_depth"]
+    try:
+        graph_obj, _stats = org_graph.build_org_graph(db, org_id)
+    except org_graph.GraphTooLargeError as exc:
+        return {
+            **base_ctx,
+            "status": "UNAVAILABLE",
+            "reason": "graph_too_large",
+            "note": (
+                f"The dependency graph could not be built ({exc}); the term "
+                "is 0 — unavailable is not the same as safe."
+            ),
+        }
+
+    graph_ctx = {
+        "nodes": graph_obj.number_of_nodes(),
+        "edges": graph_obj.number_of_edges(),
+        "edges_provenance": "ADMIN_DECLARED",
+    }
+
+    if primary not in graph_obj:
+        # The criticality resolver proved this asset is registered in this org,
+        # so a missing node means the row changed underneath the run: fail
+        # closed to an unknown input rather than guessing.
+        return {
+            **base_ctx,
+            "status": "UNAVAILABLE",
+            "reason": "affected_asset_not_in_graph",
+            "graph": graph_ctx,
+            "primary_asset_id": primary,
+            "note": (
+                "The affected asset was not present in the dependency graph "
+                "when it was built, so the term could not be evaluated; "
+                "the score was not adjusted and this is an unknown input."
+            ),
+        }
+
+    radius = org_graph.blast_radius(graph_obj, primary, max_depth=depth)
+    entries = radius["potential_exposure"]
+    raw = 0.0
+    for entry in entries:
+        criticality_weight = max(0.0, (int(entry["criticality"]) - 1) / 4)
+        raw += criticality_weight * (1.0 / int(entry["depth"]))
+    intensity = round(raw / (raw + saturation), 6) if raw > 0.0 else 0.0
+
+    if entries:
+        note = (
+            f"Derived from {len(entries)} documented exposure path step(s) "
+            f"from {primary} within depth {depth} (admin-declared "
+            "relationships only). Potential exposure is not evidence that any "
+            "compromise has occurred."
+        )
+    else:
+        note = (
+            f"No documented relationship leads from {primary} to another "
+            f"registered asset within depth {depth}, so the term is 0. "
+            "Absence of a declared relationship is not evidence that no "
+            "exposure path exists."
+        )
+
+    return {
+        **base_ctx,
+        "status": "AVAILABLE",
+        "intensity": intensity,
+        "primary_asset_id": primary,
+        "reachable_count": radius["count"],
+        "critical_count": radius["critical_count"],
+        "depth_used": radius["max_depth"],
+        "truncated": bool(radius["truncated"]),
+        "graph": graph_ctx,
+        "note": note,
+    }
+
+
+def resolve_run_dependency_exposure(
+    db: Session, user_id: str, asset_context: dict
+) -> dict:
+    """Same resolution for callers outside ``run_analysis`` (the propagation
+    simulation), resolving the caller's organization server-side first."""
+    return resolve_org_dependency_exposure(
+        db, _resolve_org_or_none(db, user_id), asset_context
+    )
+
+
+def apply_dependency_feature(features: dict, dependency_context: dict) -> dict:
+    """Merge a resolved graph context into a feature vector (pure, in place).
+
+    Only an ``AVAILABLE`` context contributes an intensity; every other status
+    leaves the vector at 0 — the recorded status carries the "why" (a caller
+    that shows a score must show the context beside it, not just the points).
+    """
+    if (
+        dependency_context.get("status") == "AVAILABLE"
+        and dependency_context.get("intensity") is not None
+    ):
+        features[risk.DEPENDENCY_EXPOSURE_FEATURE] = float(
+            dependency_context["intensity"]
+        )
+    else:
+        features[risk.DEPENDENCY_EXPOSURE_FEATURE] = 0.0
+    return features
+
+
 def run_analysis(db: Session, user_id: str, *, persist: bool = True) -> dict:
     """Run the full pipeline and (optionally) persist the run's results."""
     run_id = uuid.uuid4().hex
@@ -201,8 +396,17 @@ def run_analysis(db: Session, user_id: str, *, persist: bool = True) -> dict:
     )
     # Asset criticality: resolved HERE, server-side, inside this organization.
     criticality, asset_context = resolve_org_criticality(db, org_id, events)
-    risk_breakdown = risk.compute_risk(events, criticality=criticality)
-    features = risk.extract_features(events)
+    # Phase 6b: the organization's dependency-graph exposure, resolved HERE,
+    # server-side, from admin-declared edges only (docs/RISK_MODEL.md §1.3).
+    dependency_context = resolve_org_dependency_exposure(db, org_id, asset_context)
+    risk_breakdown = risk.compute_risk(
+        events, criticality=criticality, dependency=dependency_context
+    )
+    # THE feature vector of this run: extracted findings + the merged graph
+    # intensity (whatever compute_risk actually scored with). Attribution and
+    # the planner consume THIS vector, so every consumer explains/optimizes the
+    # score that was actually shown — never a re-derived approximation.
+    features = risk_breakdown.components["features"]
     # Attribution and planner run on the SAME value function context, so every
     # consumer of this run explains/optimizes the score that was actually shown.
     attribution = shapley.attribute(features, criticality=criticality)

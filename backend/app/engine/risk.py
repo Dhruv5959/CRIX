@@ -1,9 +1,9 @@
-"""Contextual risk engine (§6, Phase 4).
+"""Contextual risk engine (§6, Phase 4; dependency-exposure term added 6b).
 
 Deterministic. Non-additive. Documented parameters.
 
-    risk = clip( m(c) * (base_risk + interaction_risk) - mitigation_credit,
-                0, 100 )
+    risk = clip( m(c) * (base_risk + interaction_risk) + dependency_exposure
+                - mitigation_credit, 0, 100 )
 
 where ``m(c) = 1 + step * (c - neutral)`` is the **asset-criticality
 multiplier**: ``c`` is the criticality (1..5) the company assigned to the most
@@ -13,10 +13,22 @@ evidence-based exposure by how much the company cares about that asset
 "unadjusted", never a claim of safety). Criticality alone never creates risk:
 with no findings the score is 0 for every ``c``.
 
+``dependency_exposure = 100 * w_dep * d`` is the **Phase 6b term**: how much
+potential exposure the affected registered asset has through the
+organization's documented dependency graph, from the bounded
+``org_graph.blast_radius`` query (``d ∈ [0, 1)`` is the criticality-weighted
+reachable mass; ``RISK_PARAMS["dependency_exposure"]``). It is resolved
+server-side by the pipeline from admin-declared edges only and enters as a
+normal feature intensity (the ``dependency_exposure`` feature group), so it is
+bounded (at most ``100 * w_dep`` points), ablatable (set the intensity to 0 or
+run with ``CRIX_RISK_DEPENDENCY_EXPOSURE_ENABLED=false``), and attributed like
+every other factor. When no graph input is supplied the term is exactly 0 and
+the score equals the Phase 4 formula bit-for-bit.
+
 The additive identity used by the UI is::
 
     risk = base_risk + interaction_risk + criticality_adjustment
-           - mitigation_credit        (before clipping)
+           + dependency_exposure - mitigation_credit        (before clipping)
 
 with ``criticality_adjustment = (m - 1) * (base_risk + interaction_risk)``.
 
@@ -36,6 +48,11 @@ Design notes / honest caveats
   never add points outside the formula documented here.
 - Asset criticality enters only through the single documented multiplier ``m``.
   There is no second, hidden importance bonus anywhere in this module.
+- The ``dependency_exposure`` intensity is *not* computed here — this module
+  never touches the database or the graph. The pipeline resolves it
+  server-side (org-scoped, documented edges only) and passes it in; with no
+  input, the term is 0 (unknown graph input is recorded by the caller, never
+  assumed safe).
 - mitigation_credit is reduced when session exposure is present: a stolen session
   bypasses credential-based controls. This mirrors the curated knowledge graph
   (`session_hijacking --defeats--> passkey`) and is documented in RISK_PARAMS.
@@ -47,8 +64,9 @@ Model versioning
 ----------------
 ``RISK_MODEL_VERSION`` is stamped on every breakdown and persisted snapshot.
 Rows produced before asset criticality existed carry ``risk-1.0`` (back-filled
-by the Phase 4 migration); current calculations produce ``risk-2.0``. Historical
-rows are never rewritten when the formula changes.
+by the Phase 4 migration); rows produced before the dependency-exposure term
+existed carry ``risk-2.0``; current calculations produce ``risk-2.1``.
+Historical rows are never rewritten when the formula changes.
 """
 from __future__ import annotations
 
@@ -58,7 +76,7 @@ from app.schemas import SecurityEventSchema
 
 # Version of the documented formula implemented in this file. Persisted with
 # every score so a snapshot produced by an older formula stays identifiable.
-RISK_MODEL_VERSION = "risk-2.0"
+RISK_MODEL_VERSION = "risk-2.1"
 
 # --------------------------------------------------------------------------- #
 # Feature groups (also the Shapley players). Order is stable & meaningful.
@@ -67,8 +85,14 @@ RISK_FEATURES = [
     "breach", "session", "identity", "reuse", "no_mfa",
     "sim_swap", "push_bombing", "phishing", "permissions", "dependency",
 ]
+# Phase 6b: the org dependency-graph exposure intensity. A first-class feature
+# (player) rather than hidden context: it is an input like any other, so
+# attribution can show how many points the graph contributes, the planner and
+# what-if re-evaluate it with the real function, and an absent graph stays
+# absent (0) instead of inflating the empty-coalition baseline.
+DEPENDENCY_EXPOSURE_FEATURE = "dependency_exposure"
 MITIGATION_FEATURES = ["passkey", "mfa"]
-ALL_FEATURES = RISK_FEATURES + MITIGATION_FEATURES
+ALL_FEATURES = RISK_FEATURES + [DEPENDENCY_EXPOSURE_FEATURE] + MITIGATION_FEATURES
 
 # event_type -> feature group
 EVENT_TO_FEATURE = {
@@ -113,6 +137,18 @@ RISK_PARAMS = {
     # a stolen session bypasses credential-based controls => discount mitigation
     "session_mitigation_discount": 0.70,
     "max_mitigation_credit": 0.45,   # cap total credit at 45% of pre-mitigation risk
+    # Phase 6b — DependencyExposure (docs/RISK_MODEL.md §1.3). Intensity
+    # d ∈ [0, 1) comes from the org graph's bounded blast-radius query:
+    #   raw   = sum over reachable assets of  ((criticality - 1) / 4) * (1 / depth)
+    #   d     = raw / (raw + saturation)          (saturating, always < 1)
+    #   points = 100 * weight * d                 (bounded by 100 * weight)
+    # weight 0.08 mirrors the mid-tier evidence groups (permissions /
+    # dependency / sim_swap), so even a fully saturated graph adds less than a
+    # top-weighted finding group: importance of connected assets can re-rank
+    # close cases, never dominate the findings themselves. saturation 4.0
+    # means a criticality-5 asset one hop away contributes a quarter of the
+    # maximum.
+    "dependency_exposure": {"weight": 0.08, "saturation": 4.0},
     # Asset criticality: the importance (1 = low .. 5 = business-critical) an
     # admin assigned to the affected registered asset. Neutral level 3 is the
     # registration default, so a default asset neither raises nor lowers the
@@ -140,8 +176,12 @@ class RiskBreakdown:
     range_high: float
     # Additive criticality term: (m - 1) * (base + interaction). 0 whenever the
     # multiplier is neutral (criticality missing or level 3), so the UI identity
-    # base + interaction + adjustment − mitigation = score stays exact pre-clip.
+    # base + interaction + adjustment + dependency_exposure − mitigation = score
+    # stays exact pre-clip.
     criticality_adjustment: float = 0.0
+    # Phase 6b additive dependency-exposure term (points, 0..100*w_dep). 0 when
+    # no graph input was supplied — never a claim that no exposure exists.
+    dependency_exposure: float = 0.0
     components: dict = field(default_factory=dict)
 
 
@@ -197,10 +237,15 @@ def _validate_features(features: dict) -> dict[str, float]:
 def extract_features(events: list[SecurityEventSchema]) -> dict[str, float]:
     """Build the feature vector from normalized events.
 
-    Risk features take the maximum severity among FINDING events in the group
+    Risk features take the max severity among FINDING events in the group
     (an event's severity is its observation strength). Mitigation features are
     1.0 when the corresponding control is present. UNAVAILABLE / CHECKED_SAFE /
     NOT_CHECKED never contribute risk.
+
+    ``dependency_exposure`` is deliberately NOT derived from events: no finding
+    type maps to it. It is resolved from the organization's dependency graph by
+    the pipeline and merged in afterwards (``compute_risk``), so an event row
+    can never fabricate graph exposure.
     """
     features = {name: 0.0 for name in ALL_FEATURES}
     for event in events:
@@ -217,6 +262,27 @@ def extract_features(events: list[SecurityEventSchema]) -> dict[str, float]:
     return features
 
 
+def dependency_exposure_points(intensity: float) -> float:
+    """Points the Phase 6b dependency term contributes for intensity ``d``.
+
+    ``points = 100 * weight * d`` with ``d ∈ [0, 1]`` — bounded by
+    ``100 * weight`` (8 points at weight 0.08). Out-of-range or non-numeric
+    intensities raise ``ValueError`` (defense in depth behind
+    ``_validate_features``): an invalid graph input must never bend a score.
+    """
+    if isinstance(intensity, bool) or not isinstance(intensity, (int, float)):
+        raise ValueError(
+            f"dependency exposure intensity must be a number in [0, 1], got {intensity!r}"
+        )
+    value = float(intensity)
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(
+            f"dependency exposure intensity must be within [0, 1], got {intensity!r}"
+        )
+    weight = RISK_PARAMS["dependency_exposure"]["weight"]
+    return round(100.0 * weight * value, 4)
+
+
 def risk_from_features(
     features: dict[str, float], *, criticality: int | None = None
 ) -> tuple[float, dict[str, float]]:
@@ -227,10 +293,18 @@ def risk_from_features(
     scales the evidence-based exposure through the single documented multiplier
     ``m(c)`` and changes nothing else. The formula (see module docstring)::
 
-        score = clip( m(c) * (base + interaction) - mitigation, 0, 100 )
+        score = clip( m(c) * (base + interaction) + dependency_exposure
+                      - mitigation, 0, 100 )
+
+    ``dependency_exposure`` is read from the ``dependency_exposure`` feature
+    (resolved from the org graph by the pipeline; 0 when not supplied) and is
+    deliberately OUTSIDE ``m(c)``: the multiplier's documented scope — the
+    affected asset's importance — is unchanged from Phase 4, and the graph term
+    carries its own criticality weighting (of the *reachable* assets).
 
     Returns (score, component_breakdown) where the breakdown also carries the
-    additive criticality term so consumers can show an exact composition.
+    additive criticality and dependency terms so consumers can show an exact
+    composition.
     """
     f = _validate_features(features)
     multiplier = criticality_multiplier(criticality)
@@ -246,13 +320,20 @@ def risk_from_features(
     # Evidence-based exposure, scaled by how important the affected asset is.
     exposure = multiplier * (base + interaction)
 
-    mitigation = _mitigation_credit(f, exposure)
+    # Phase 6b: documented-dependency-graph exposure (0 without a graph input).
+    dependency_points = dependency_exposure_points(f[DEPENDENCY_EXPOSURE_FEATURE])
 
-    score = max(0.0, min(100.0, exposure - mitigation))
+    # Pre-mitigation total: the cap base includes the graph term, so mitigation
+    # can never erase more than 45% of ANY documented evidence.
+    pre_mitigation = exposure + dependency_points
+    mitigation = _mitigation_credit(f, pre_mitigation)
+
+    score = max(0.0, min(100.0, pre_mitigation - mitigation))
     return round(score, 4), {
         "base_risk": round(base, 4),
         "interaction_risk": round(interaction, 4),
         "criticality_adjustment": round(exposure - (base + interaction), 4),
+        "dependency_exposure": dependency_points,
         "mitigation_credit": round(mitigation, 4),
         "criticality": criticality,
         "criticality_multiplier": multiplier,
@@ -263,9 +344,11 @@ def _mitigation_credit(f: dict[str, float], exposure: float) -> float:
     """Mitigation credit, discounted by session exposure (a stolen session
     bypasses credential-based controls — see the curated knowledge graph).
 
-    The credit is capped at ``max_mitigation_credit`` of the *scaled* exposure,
-    so a control can offset at most 45% of what the model says the (importance
-    adjusted) situation is worth — mitigations never erase the evidence.
+    ``exposure`` is the PRE-mitigation total (criticality-scaled evidence PLUS
+    the Phase 6b dependency-exposure term). The credit is capped at
+    ``max_mitigation_credit`` of that total, so a control can offset at most
+    45% of what the model says the (importance adjusted) situation is worth —
+    mitigations never erase the evidence, graph-derived or otherwise.
     """
     discount = 1.0 - RISK_PARAMS["session_mitigation_discount"] * f["session"]
     raw_credit = sum(
@@ -382,7 +465,11 @@ def _unavailable_inputs(events: list[SecurityEventSchema]) -> list[dict]:
     return sorted(rows, key=lambda row: row["event_id"])
 
 
-def _uncertainty_notes(events: list[SecurityEventSchema], criticality: int | None) -> list[str]:
+def _uncertainty_notes(
+    events: list[SecurityEventSchema],
+    criticality: int | None,
+    dependency_status: str | None = None,
+) -> list[str]:
     """What this score does not know — stated next to the score itself."""
     notes = [
         "Prioritization measure: it orders what to fix first; it is not a "
@@ -396,6 +483,19 @@ def _uncertainty_notes(events: list[SecurityEventSchema], criticality: int | Non
             "not adjusted for asset importance. This is an unknown input, not "
             "evidence that the asset does not matter."
         )
+    if dependency_status == "UNAVAILABLE":
+        notes.append(
+            "The organization's dependency graph could not be evaluated, so "
+            "the score was not adjusted for potential exposure paths through "
+            "declared relationships. Unavailable is not the same as safe."
+        )
+    elif dependency_status == "NO_ORGANIZATION":
+        notes.append(
+            "No organization context was available, so no dependency-graph "
+            "input could be resolved and the score was not adjusted for "
+            "potential exposure paths. This is an unknown input, not an "
+            "absence of exposure."
+        )
     missing = _unavailable_inputs(events)
     if missing:
         notes.append(
@@ -405,8 +505,30 @@ def _uncertainty_notes(events: list[SecurityEventSchema], criticality: int | Non
     return notes
 
 
+# Statuses the pipeline (or a test) may hand to compute_risk. Anything else is
+# a programming error — an unrecognized dependency status must never silently
+# bend a score.
+DEPENDENCY_EXPOSURE_STATUSES = frozenset({
+    "AVAILABLE",          # graph evaluated; intensity is the documented d
+    "NO_AFFECTED_ASSET",  # no registered asset bound to the findings
+    "NO_ORGANIZATION",    # run has no org context -> graph cannot be read
+    "UNAVAILABLE",        # graph build failed / too large -> unknown input
+    "DISABLED",           # config flag off (ablation) -> term excluded on purpose
+    "NOT_PROVIDED",       # caller did not evaluate the graph (engine-level use)
+})
+
+_NOT_PROVIDED_NOTE = (
+    "Dependency exposure was not evaluated by this caller; the score "
+    "excludes the graph term (0 points), which is an unevaluated input — "
+    "not a statement that no exposure path exists."
+)
+
+
 def compute_risk(
-    events: list[SecurityEventSchema], *, criticality: int | None = None
+    events: list[SecurityEventSchema],
+    *,
+    criticality: int | None = None,
+    dependency: dict | None = None,
 ) -> RiskBreakdown:
     """Score one run's findings with full traceability.
 
@@ -414,15 +536,56 @@ def compute_risk(
     organization's registered assets (see ``pipeline.resolve_run_criticality``)
     — never from anything a client sends. ``None`` means no registered asset
     was bound to the findings; the score is then simply unadjusted.
+
+    ``dependency`` is the Phase 6b graph context resolved SERVER-SIDE by
+    ``pipeline.resolve_org_dependency_exposure`` (org-scoped, documented edges
+    only). It must carry a ``status`` from
+    :data:`DEPENDENCY_EXPOSURE_STATUSES`; when ``status == "AVAILABLE"`` it
+    must also carry ``intensity`` (d ∈ [0,1]), which is merged into the feature
+    vector. Any other status contributes 0 points and is recorded in
+    ``components["dependency_exposure"]`` with an explicit note — an unknown
+    graph is never scored as an absent one.
     """
     features = extract_features(events)
+
+    if dependency is None:
+        dep_context: dict = {
+            "status": "NOT_PROVIDED",
+            "intensity": None,
+            "points": 0.0,
+            "note": _NOT_PROVIDED_NOTE,
+        }
+    else:
+        dep_context = dict(dependency)
+        status = dep_context.get("status")
+        if status not in DEPENDENCY_EXPOSURE_STATUSES:
+            raise ValueError(
+                f"unknown dependency-exposure status {status!r}; "
+                f"expected one of {sorted(DEPENDENCY_EXPOSURE_STATUSES)}"
+            )
+        if status == "AVAILABLE":
+            intensity = dep_context.get("intensity")
+            if intensity is None:
+                raise ValueError(
+                    "dependency-exposure status 'AVAILABLE' requires an intensity"
+                )
+            features[DEPENDENCY_EXPOSURE_FEATURE] = float(intensity)
+        else:
+            # Non-AVAILABLE statuses never carry points; keep any stray value
+            # out of the vector so the recorded status and the math agree.
+            dep_context["intensity"] = None
+        dep_context.setdefault("points", 0.0)
+
     score, breakdown = risk_from_features(features, criticality=criticality)
+    # Keep the recorded points in step with what the formula actually applied.
+    dep_context["points"] = breakdown["dependency_exposure"]
     low, high = _sensitivity_range(features, criticality=criticality)
     return RiskBreakdown(
         base_risk=breakdown["base_risk"],
         interaction_risk=breakdown["interaction_risk"],
         mitigation_credit=breakdown["mitigation_credit"],
         criticality_adjustment=breakdown["criticality_adjustment"],
+        dependency_exposure=breakdown["dependency_exposure"],
         score=score,
         band=_band(score),
         confidence=_confidence(events),
@@ -433,12 +596,17 @@ def compute_risk(
             "model_version": RISK_MODEL_VERSION,
             "criticality": criticality,
             "criticality_multiplier": breakdown["criticality_multiplier"],
+            # Phase 6b graph context: status, intensity, points, provenance of
+            # the input and the honest note for whatever could not be resolved.
+            "dependency_exposure": dep_context,
             # Every event id this calculation consumed (findings, mitigation
             # checks, and non-answers alike) — sorted, so equal inputs give
             # equal traces regardless of storage order.
             "finding_ids": sorted({e.event_id for e in events}),
             "interaction_terms": _interaction_terms(features),
             "unavailable_inputs": _unavailable_inputs(events),
-            "uncertainty": _uncertainty_notes(events, criticality),
+            "uncertainty": _uncertainty_notes(
+                events, criticality, dep_context.get("status")
+            ),
         },
     )

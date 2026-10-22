@@ -16,7 +16,7 @@ Attribution is a cooperative game over the Phase 4 deterministic risk function.
 
 | Element | Definition |
 |---|---|
-| **Players** | The 12 feature groups of the risk function (10 risk features + 2 mitigation features), i.e. `risk.ALL_FEATURES`. |
+| **Players** | The 13 feature groups of the risk function (10 risk features + the Phase 6b `dependency_exposure` graph term + 2 mitigation features), i.e. `risk.ALL_FEATURES`. |
 | **Value function** | `v(S) = risk_from_features(features restricted to S, criticality=criticality)` — the REAL Phase 4 function, run on only the features in coalition `S`. Every feature NOT in `S` is set to its *absent* value (0.0). Nothing else may define `v`. |
 | **Baseline** | `v(∅) = 0`. The empty coalition holds every feature absent, and the documented function scores that as exactly 0. Asserted by a test, not assumed. |
 | **Absent factor** | A feature not in a coalition (or an input of exactly 0.0) contributes 0 to that coalition. **Absent is an explicit state — it is NOT "safe"**, it means "not part of this coalition". |
@@ -55,7 +55,7 @@ approximation is never mislabelled as exact.)
 
 ### 2.1 Exactness guarantee and cost
 
-`2^n` subsets with `n = 12` → 4096 coalitions, memoized. Deterministic, no
+`2^n` subsets with `n = 13` → 8192 coalitions, memoized. Deterministic, no
 sampling, no model trained on CRIX's own outputs (§0.5). Efficiency holds to
 numerical noise (~1e-9).
 
@@ -72,7 +72,7 @@ estimator. `samples >= 1` (0 is rejected). Reproducible for a fixed seed.
 |---|---|
 | Approximation error | Real, measured, surfaced: `per_factor_abs_error`, `max_factor_abs_error`, `mean_factor_abs_error`, `total_abs_error` from `compare_exact_vs_approximate`. |
 | Approximation is never authority | The pipeline never uses it; `is_exact=False` and it is labelled in method and UI. |
-| Exact cost | `2^12` = 4096 coalitions, memoized, benchmarked < 2 s (measured ~69 ms). Cheap enough that the approximation is a demonstration, not a necessity. |
+| Exact cost | `2^13` = 8192 coalitions, memoized, benchmarked < 2 s (measured ~100 ms). Cheap enough that the approximation is a demonstration, not a necessity. |
 | Attribution ≠ causation | A contribution is how much a factor moved this score. It is not the likelihood of any event and not an account of what happened. Stated in `plain_language`. |
 | Negative ≠ safe | A negative contribution (a mitigation lowering risk) is still one measured factor, not an all-clear. Stated in `plain_language`. |
 
@@ -103,9 +103,10 @@ Every attribution payload carries:
 ## 4. Worked demo (real, reproducible)
 
 Seed demo: findings bound to `demo@example.com`, criticality **4**. The
-attribution total equals the score **67.87**, efficiency error **0.0**, and the
+attribution total equals the score **69.47**, efficiency error **0.0**, and the
 waterfall explains each feature's exact contribution — summing exactly to the
-total. (`docs/PROGRESS.md` records the seed run.)
+total. The organization graph's 1.6 points appear as the `dependency_exposure`
+player's contribution, exactly. (`docs/PROGRESS.md` records the seed run.)
 
 ---
 
@@ -113,8 +114,9 @@ total. (`docs/PROGRESS.md` records the seed run.)
 
 * Shapley values explain the *function*, not the world: they say how the score
   is composed, not what is likely to happen.
-* The value function is the clipped, criticality-scaled Phase 4 function, so
-  contributions are bounded by it and can never exceed the score.
+* The value function is the clipped, criticality-scaled `risk-2.1` function
+  (Phase 6b), so contributions are bounded by it and can never exceed the
+  score.
 * Criticality is context (§1), so its own effect is folded into every
   contribution rather than shown as a separate player.
 * The seeded approximation is a demonstration of the exact-vs-approx gap, not a

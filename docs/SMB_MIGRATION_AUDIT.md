@@ -914,3 +914,56 @@ PostgreSQL here. Claim: "DDL verified for the PostgreSQL dialect" only.
   direction.
 * PostgreSQL not run (§16.3); supersedes nothing in §15 (Phase 5 record
   stands).
+
+## 17. Phase 6b completion record (2026-10-23)
+
+**Commit:** (see `docs/PROGRESS.md`) · **Tag:** `phase-6b-done`
+**Change:** the Phase 6 graph's *data* now feeds the authoritative score
+through **exactly one documented term** — `dependency_exposure` — making
+"graph-based risk prioritization" a property of the formula. Formula version
+`risk-2.0` → **`risk-2.1`**. Specification: `docs/RISK_MODEL.md` §1.3.
+Supersedes §16.4's "the graph never changes the risk score" claim: graph
+*operations* still never change it (asserted), but a *declared relationship*
+now moves the score by exactly the documented term and nothing else. §16's
+record otherwise stands as written (true at the time).
+
+### 17.1 What changed
+
+| Area | Change |
+|---|---|
+| `app/engine/risk.py` | `risk-2.1`; `dependency_exposure_points()` (bounded `100·0.08·d`, monotone, validated); `risk_from_features`/`compute_risk(..., dependency=)` add the term **outside** `m(c)`; mitigation cap base includes it; six documented statuses with fail-closed merging (`AVAILABLE` without intensity / unknown status → `ValueError`; non-`AVAILABLE` drops stray intensity); uncertainty notes only for genuinely unknown inputs (`UNAVAILABLE`, `NO_ORGANIZATION`); module still imports nothing from graph/DB/network (AST-pinned). |
+| `app/engine/pipeline.py` | `resolve_org_dependency_exposure` / `resolve_run_dependency_exposure` / `apply_dependency_feature`; `run_analysis` resolves org-scoped blast radius from the primary affected asset (depth bound 3, honest `truncated`), records full provenance context (source, formula, depth, counts, `ADMIN_DECLARED`, disclaimer), and passes the single features vector to Shapley and the planner. `GraphTooLargeError` → `UNAVAILABLE` (reason recorded, never zero-as-safe). |
+| `app/config.py`, `.env.example` | `CRIX_RISK_DEPENDENCY_EXPOSURE_ENABLED` (default true) — ablation switch for Phase 12; `DISABLED` status says so in the payload. |
+| `app/routers/analysis.py`, `app/routers/propagation.py` | API risk block exposes the term's points row (composition pinned by test); what-if/scenario simulations inherit the term through the same features vector. |
+| Tests | New `tests/test_dependency_exposure_phase6b.py` (23 tests) + documented intentional updates in `test_risk_phase4.py` / `test_shapley_phase5.py` / `test_org_graph_phase6.py` (players 12→13; edge test strengthened to "moves the score by exactly the documented term"; vacuous `players` scan replaced with a real `contributions` check; dep-aware expected-score literals). |
+| Docs | `RISK_MODEL.md` (risk-2.1, §1.3, demo 69.5, limitations), `ATTRIBUTION.md` (13 players / 8192 coalitions / ~100 ms), `ORG_GRAPH.md` §6, `ARCHITECTURE.md`, `IMPLEMENTATION_STATUS.md`, `PRESENTATION.md`, `README.md`, PROGRESS.md entry. |
+
+### 17.2 Verified state (every command executed)
+
+| Check | Command | Result |
+|---|---|---|
+| Full backend suite | `python -m pytest` (capture script; **no CLI `-q`** — `pytest.ini` already sets it and a second `-q` hides the summary) | **403 passed in 90.16s, exit 0** (380 prior + 23 new) |
+| Targeted suites | `pytest tests/test_dependency_exposure_phase6b.py tests/test_risk_phase4.py tests/test_shapley_phase5.py tests/test_org_graph_phase6.py` | **111 passed in 20.08s, exit 0** |
+| Frontend | `tsc --noEmit` / `vitest run` / `npm run build` | exit 0 / **31 passed** / exit 0 |
+| Demo seed | `python scripts/seed_demo.py` | **69.5 (HIGH)** — base 48.5 + interaction 13.2 → ×1.1 = 67.87 + dependency **1.6** (`d = 1/(1+4) = 0.2` from `github.com/acme/api`, criticality 5, depth 1); range **63–78**; Shapley err 0.0; planner gap 0.00% |
+| Evaluation harness | `python scripts/run_evaluation.py` | Shapley max efficiency error **2.00e-09**, mean **100.4 ms** at 13 features (2^13 = 8192 coalitions); planner gap 0.0686, 2 traps; ML F1 0.830 / 0.809 |
+
+### 17.3 Boundaries — honestly stated
+
+* The term is **bounded** (≤ 8 points, depth ≤ 3) and fed only by
+  administrator-declared relationships: absence of edges is an **evaluated
+  zero**, recorded as such, never presented as absence of exposure. The
+  honesty ceiling is the organization's own declared data.
+* `build_input_events` mints fresh UUIDs for derived graph events per call
+  (documented Phase 0 behavior, pre-6b): scores are deterministic; only
+  `finding_ids` churns between identical runs.
+* Relationship exposure direction is semantic (`RESETS_PASSWORD`/
+  `HAS_ACCESS_TO`/`DEPLOYS_TO` forward, `USES`/`DEPENDS_ON` reverse,
+  `INTEGRATES_WITH` both): a reverse-type edge *from* the primary asset is
+  not reachable exposure and correctly contributes 0.
+* PostgreSQL not run (unchanged limitation): no new tables or columns; claim
+  is "DDL verified for the PostgreSQL dialect" only.
+* No migration, no new dependency, no OAuth change, no ML change, no
+  unrelated subsystem. Historical snapshots are never rewritten (`risk-1.0`
+  and `risk-2.0` rows survive a `risk-2.1` run byte-for-byte, pinned by
+  test).

@@ -217,10 +217,20 @@ auditable.
 
 ### Relationship with the authoritative risk score
 
-The graph **never** changes the risk score or its inputs (§5.9). There is no
-new risk formula; the deterministic engine remains the only risk authority;
-Shapley attribution still explains, never overrides. Compatibility tests
-(#24, #25) assert that running every graph operation leaves the Phase 4
-score, features, and criticality — and the Phase 5 attribution total —
-bit-identical, and that `org_graph.py` imports neither the risk nor the
-attribution engine.
+Running any graph operation **never** changes the risk score or its inputs
+(§5.9): traversal is read-only, and `org_graph.py` imports neither the risk
+nor the attribution engine. Compatibility tests (#24, #25) assert that
+executing every operation between two analyses leaves the score, features,
+criticality and the Phase 5 attribution total bit-identical.
+
+What changed in **Phase 6b**: the graph's *data* now feeds the score through
+exactly one documented term — `dependency_exposure`
+(`docs/RISK_MODEL.md` §1.3), computed by the pipeline from this module's
+bounded blast-radius query. There is still no new risk formula (the engine
+consumes the term as one intensity input like any other), the deterministic
+engine remains the only risk authority, and Shapley attribution still
+explains, never overrides — the term is simply one more player among 13. The
+same tests' positive controls pin the sharpened boundary: a new declared
+relationship moves the score by exactly the documented term and nothing else,
+and no raw graph structure (edge, path, the graph itself) is ever a feature or
+a player.

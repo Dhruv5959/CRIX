@@ -50,7 +50,14 @@ def _register_asset(db, org_id: str, asset_id: str, criticality: int) -> OrgAsse
 # 1. The game is documented and its value function is the REAL risk function
 # --------------------------------------------------------------------------- #
 def test_game_players_are_exactly_the_documented_feature_groups():
-    assert shapley.N_FEATURES == len(risk.ALL_FEATURES) == 12
+    # Phase 6b: 13 players, not 12 — the documented DependencyExposure intensity
+    # is a first-class feature/player (docs/RISK_MODEL.md §1.3, docs/ATTRIBUTION.md
+    # §1): an input like any other, so attribution shows exactly how many points
+    # the org graph contributes and v(∅) = 0 still holds by construction (absent
+    # graph → absent player → 0). Nothing was removed or weakened: the 12
+    # pre-6b groups are all still players.
+    assert shapley.N_FEATURES == len(risk.ALL_FEATURES) == 13
+    assert risk.DEPENDENCY_EXPOSURE_FEATURE in risk.ALL_FEATURES
 
 
 def test_value_function_is_the_real_risk_function_not_a_surrogate():
