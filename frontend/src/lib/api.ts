@@ -5,21 +5,34 @@
 import type {
   Account,
   AccountRelationship,
+  AdminView,
   AnalysisResult,
+  AssetDependency,
   EvaluationSummary,
   Explanation,
   GraphPayload,
   Health,
+  Invitation,
+  InvitationCreated,
+  MemberDetail,
+  MemberInfo,
   OAuthProviderInfo,
+  OrgAsset,
   OrgGraphBlastRadius,
   OrgGraphNeighbors,
   OrgGraphPayload,
   OrgGraphPaths,
+  OrgInfo,
   PhishingResult,
   PropagationAccount,
   ProviderCapability,
   ProviderConnection,
   RelationshipType,
+  RemediationPlanResult,
+  RemediationSettings,
+  RemediationTask,
+  RemediationTaskDetail,
+  RiskHistoryEntry,
   SecurityEvent,
   SimulationResult,
   TokenResponse,
@@ -258,4 +271,102 @@ export const api = {
       `/api/password-check/range/${prefix}`,
       { auth: false },
     ),
+
+  // --- organization ---
+  getOrg: () => request<OrgInfo>("/api/org"),
+  updateOrg: (name: string) =>
+    request<OrgInfo>("/api/org", { method: "PATCH", body: JSON.stringify({ name }) }),
+  listMembers: () => request<MemberInfo[]>("/api/members"),
+  getMember: (membershipId: string) =>
+    request<MemberDetail>(`/api/members/${membershipId}`),
+  adminViews: () => request<AdminView[]>("/api/org/admin-views"),
+  createInvitation: (email: string, role: string = "MEMBER") =>
+    request<InvitationCreated>("/api/invitations", {
+      method: "POST",
+      body: JSON.stringify({ email, role }),
+    }),
+  listInvitations: () => request<Invitation[]>("/api/invitations"),
+  acceptInvitation: (token: string, password?: string) =>
+    request<{ detail: string }>("/api/auth/accept-invitation", {
+      method: "POST",
+      body: JSON.stringify({ token, password: password || undefined }),
+    }),
+
+  // --- org assets ---
+  listAssets: () => request<OrgAsset[]>("/api/assets"),
+  createAsset: (payload: {
+    asset_id: string;
+    asset_type: string;
+    label: string;
+    criticality?: number;
+    service_name?: string;
+  }) => request<OrgAsset>("/api/assets", { method: "POST", body: JSON.stringify(payload) }),
+  getAsset: (assetId: string) => request<OrgAsset>(`/api/assets/${assetId}`),
+  updateAsset: (assetId: string, payload: Record<string, unknown>) =>
+    request<OrgAsset>(`/api/assets/${assetId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteAsset: (assetId: string) =>
+    request<void>(`/api/assets/${assetId}`, { method: "DELETE" }),
+  listDependencies: () => request<AssetDependency[]>("/api/dependencies"),
+  createDependency: (payload: {
+    from_asset_id: string;
+    to_asset_id: string;
+    relationship_type: string;
+    weight?: number;
+    note?: string;
+  }) =>
+    request<AssetDependency>("/api/dependencies", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  // --- remediation tasks ---
+  remediationSettings: () => request<RemediationSettings>("/api/remediation/settings"),
+  updateRemediationSettings: (effort_budget: number) =>
+    request<RemediationSettings>("/api/remediation/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ effort_budget }),
+    }),
+  listTasks: () => request<RemediationTask[]>("/api/remediation/tasks"),
+  createTask: (payload: {
+    action_key: string;
+    target_asset_id?: string;
+    finding_ids?: string[];
+    effort?: number;
+    verification_method?: string;
+  }) =>
+    request<RemediationTask>("/api/remediation/tasks", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getTask: (taskId: string) =>
+    request<RemediationTaskDetail>(`/api/remediation/tasks/${taskId}`),
+  updateTask: (taskId: string, payload: Record<string, unknown>) =>
+    request<RemediationTask>(`/api/remediation/tasks/${taskId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  completeTask: (taskId: string) =>
+    request<RemediationTask>(`/api/remediation/tasks/${taskId}/complete`, { method: "POST" }),
+  verifyTask: (taskId: string, payload: { method: string; attested?: boolean; evidence_refs?: string[] }) =>
+    request<RemediationTask>(`/api/remediation/tasks/${taskId}/verify`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  reopenTask: (taskId: string, reason?: string) =>
+    request<RemediationTask>(`/api/remediation/tasks/${taskId}/reopen`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+  remediationPlan: (budget?: number) =>
+    request<RemediationPlanResult>("/api/remediation/plan", {
+      method: "POST",
+      body: JSON.stringify(budget !== undefined ? { budget } : {}),
+    }),
+
+  // --- risk history ---
+  riskHistory: () =>
+    request<{ entries: RiskHistoryEntry[] }>("/api/risk-history"),
 };

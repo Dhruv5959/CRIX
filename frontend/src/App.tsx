@@ -9,6 +9,11 @@ import OverviewPage from "@/pages/OverviewPage";
 import SignalsPage from "@/pages/SignalsPage";
 import CorrelationsPage from "@/pages/CorrelationsPage";
 import ExplanationPage from "@/pages/ExplanationPage";
+import AssetsPage from "@/pages/AssetsPage";
+import MembersPage from "@/pages/MembersPage";
+import TasksPage from "@/pages/TasksPage";
+import RiskHistoryPage from "@/pages/RiskHistoryPage";
+import AuditPage from "@/pages/AuditPage";
 
 // Heavy pages (force-graph, charting libraries) are split out of the initial
 // bundle and loaded on demand.
@@ -18,7 +23,6 @@ const RemediationPage = lazy(() => import("@/pages/RemediationPage"));
 const EvaluationPage = lazy(() => import("@/pages/EvaluationPage"));
 const KnowledgePage = lazy(() => import("@/pages/KnowledgePage"));
 const PropagationPage = lazy(() => import("@/pages/PropagationPage"));
-import ConnectionsPage from "@/pages/ConnectionsPage";
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -47,8 +51,9 @@ export default function App() {
         }
       >
         <Route path="/" element={<OverviewPage />} />
+        <Route path="/assets" element={<AssetsPage />} />
+        <Route path="/members" element={<MembersPage />} />
         <Route path="/signals" element={<SignalsPage />} />
-        <Route path="/connections" element={<ConnectionsPage />} />
         <Route
           path="/propagation"
           element={
@@ -66,6 +71,7 @@ export default function App() {
             </Suspense>
           }
         />
+        <Route path="/risk-history" element={<RiskHistoryPage />} />
         <Route
           path="/graph"
           element={
@@ -74,6 +80,7 @@ export default function App() {
             </Suspense>
           }
         />
+        <Route path="/tasks" element={<TasksPage />} />
         <Route
           path="/remediation"
           element={
@@ -99,6 +106,7 @@ export default function App() {
             </Suspense>
           }
         />
+        <Route path="/audit" element={<AuditPage />} />
       </Route>
     </Routes>
   );

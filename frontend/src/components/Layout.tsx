@@ -1,19 +1,22 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   Activity,
+  BarChart3,
+  Box,
+  ClipboardList,
   GitBranch,
+  History,
   LayoutDashboard,
-  Link2,
   ListChecks,
   Menu,
   Network,
-  Plug,
   Route,
   ScrollText,
+  Shield,
   ShieldHalf,
   Sparkles,
+  Users,
   X,
-  BarChart3,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -22,22 +25,35 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { Health } from "@/lib/types";
 
-const nav = [
+interface NavItem {
+  to: string;
+  label: string;
+  icon: React.ComponentType<{ size?: number }>;
+  end?: boolean;
+  /** Only show for these roles. Omit = visible to all. */
+  roles?: string[];
+}
+
+const nav: NavItem[] = [
   { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
-  { to: "/signals", label: "Connected Signals", icon: Plug },
-  { to: "/connections", label: "Live Connections", icon: Link2 },
+  { to: "/assets", label: "Assets", icon: Box },
+  { to: "/members", label: "Members", icon: Users },
+  { to: "/signals", label: "Connected Signals", icon: ClipboardList },
   { to: "/propagation", label: "Propagation", icon: Route },
   { to: "/correlations", label: "Correlations", icon: GitBranch },
   { to: "/risk", label: "Risk & Attribution", icon: Activity },
+  { to: "/risk-history", label: "Risk History", icon: History },
   { to: "/graph", label: "Dependency Graph", icon: Network },
+  { to: "/tasks", label: "Tasks", icon: ListChecks },
   { to: "/remediation", label: "Remediation & What-If", icon: ListChecks },
   { to: "/explanation", label: "GraphRAG Explanation", icon: Sparkles },
   { to: "/evaluation", label: "Evaluation", icon: BarChart3 },
   { to: "/knowledge", label: "Knowledge Graph", icon: ScrollText },
+  { to: "/audit", label: "Audit & RBAC", icon: Shield, roles: ["ORG_ADMIN"] },
 ];
 
 export default function Layout() {
-  const { user, logout } = useAuth();
+  const { user, org, role, logout } = useAuth();
   const navigate = useNavigate();
   const [health, setHealth] = useState<Health | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -56,9 +72,7 @@ export default function Layout() {
   }, [menuOpen]);
 
   // Which breach provider the backend will use, so the sidebar states the
-  // capability honestly instead of only mentioning HIBP's API key. The rail is
-  // narrow, so the parenthetical detail is dropped here; the result panel and
-  // /api/health carry the full provider_label.
+  // capability honestly instead of only mentioning HIBP's API key.
   const breachLookupAvailable =
     !!health && (health.breach_email_provider === "xposedornot" || health.hibp_configured);
   const shortProviderLabel = (health?.breach_email_provider_label || "").replace(
@@ -70,6 +84,12 @@ export default function Layout() {
     : health.breach_email_provider === "hibp"
       ? `Breach lookup: HIBP ${health.hibp_configured ? "configured" : "not configured"}`
       : `Breach lookup: ${shortProviderLabel || health.breach_email_provider}`;
+
+  // Filter nav by role
+  const visibleNav = nav.filter((item) => {
+    if (!item.roles) return true;
+    return role && item.roles.includes(role);
+  });
 
   const brand = (
     <div className="flex items-center gap-2.5">
@@ -100,7 +120,7 @@ export default function Layout() {
       </div>
 
       <nav aria-label="Primary" className="flex-1 space-y-1 overflow-y-auto px-3 py-2">
-        {nav.map(({ to, label, icon: Icon, end }) => (
+        {visibleNav.map(({ to, label, icon: Icon, end }) => (
           <NavLink
             key={to}
             to={to}
@@ -131,6 +151,11 @@ export default function Layout() {
       <div className="border-t border-white/10 p-4">
         <div className="mb-3 text-xs text-ink-faint">
           <div className="truncate text-ink-muted">{user?.email}</div>
+          {org && (
+            <div className="mt-0.5 text-[10px] text-ink-faint">
+              {org.name} · {role}
+            </div>
+          )}
           <div className="mt-1 space-y-0.5">
             {health ? (
               <>

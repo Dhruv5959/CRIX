@@ -377,6 +377,143 @@ export interface Health {
 }
 
 // --------------------------------------------------------------------------- //
+// Organization, members, assets, tasks (Phase 7b)
+// --------------------------------------------------------------------------- //
+export type OrgRole = "ORG_ADMIN" | "MEMBER" | "VIEWER";
+
+export interface OrgInfo {
+  id: string;
+  name: string;
+  slug: string;
+  role: OrgRole;
+  member_count: number;
+  asset_count: number;
+  created_at: string;
+}
+
+export interface MemberInfo {
+  membership_id: string;
+  user_id: string;
+  email: string;
+  role: OrgRole;
+  is_active: boolean;
+  joined_at: string;
+  assets_owned: number;
+}
+
+export interface MemberDetail extends MemberInfo {
+  assets: Array<Record<string, unknown>>;
+}
+
+export interface Invitation {
+  id: string;
+  email: string;
+  role: string;
+  expires_at: string;
+  used_at: string | null;
+  created_at: string;
+}
+
+export interface InvitationCreated extends Invitation {
+  invite_link: string;
+}
+
+export interface OrgAsset {
+  id: string;
+  asset_id: string;
+  asset_type: string;
+  label: string;
+  service_name: string | null;
+  criticality: number;
+  owner_membership_id: string | null;
+  source_mode: string;
+  created_at: string;
+}
+
+export interface AssetDependency {
+  id: string;
+  from_asset_id: string;
+  to_asset_id: string;
+  relationship_type: string;
+  edge_source: string;
+  weight: number;
+  note: string;
+  created_at: string;
+}
+
+export interface AdminView {
+  id: string;
+  admin_email: string | null;
+  action: string;
+  resource: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+
+export type TaskStatus = "OPEN" | "DONE" | "VERIFIED_MODELED" | "VERIFIED_OBSERVED";
+
+export interface RemediationTask {
+  id: string;
+  org_id: string | null;
+  action_key: string;
+  title: string;
+  description: string;
+  addresses: string[];
+  effort: number;
+  target_asset_id: string | null;
+  finding_ids: string[];
+  prerequisites: string[];
+  dependencies: string[];
+  required_evidence: string[];
+  verification_method: string;
+  status: TaskStatus;
+  assigned_to: string | null;
+  expected_reduction: number | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface TaskHistory {
+  id: string;
+  from_status: string | null;
+  to_status: string;
+  method: string;
+  result: string;
+  model_version: string | null;
+  evidence_refs: string[];
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface RemediationTaskDetail extends RemediationTask {
+  history: TaskHistory[];
+}
+
+export interface RemediationSettings {
+  org_id: string;
+  effort_budget: number;
+  note: string;
+}
+
+export interface RemediationPlanResult {
+  budget: number;
+  budget_source: string;
+  initial_risk: number;
+  comparison: PlannerComparison;
+  task_map: Record<string, string[]>;
+  unplannable_tasks: string[];
+  note: string;
+}
+
+export interface RiskHistoryEntry {
+  id: string;
+  score: number;
+  band: string;
+  model_version: string;
+  created_at: string;
+}
+
+// --------------------------------------------------------------------------- //
 // Live account connections + compromise propagation (live OAuth scope)
 // --------------------------------------------------------------------------- //
 export interface OAuthProviderInfo {

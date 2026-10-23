@@ -1,5 +1,5 @@
-// Auth context: holds the current user, attempts a silent refresh on load
-// (using the httpOnly cookie), and exposes login/register/logout.
+// Auth context: holds the current user + org membership, attempts a silent
+// refresh on load (using the httpOnly cookie), and exposes login/register/logout.
 
 import {
   createContext,
@@ -11,55 +11,77 @@ import {
   type ReactNode,
 } from "react";
 import { api, setTokens } from "./api";
-import type { User } from "./types";
+import type { OrgInfo, OrgRole, User } from "./types";
 
 interface AuthState {
   user: User | null;
+  org: OrgInfo | null;
+  role: OrgRole | null;
   loading: boolean;
   login: (email: string, password: string, totp?: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  refreshOrg: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [org, setOrg] = useState<OrgInfo | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const loadOrg = useCallback(async () => {
+    try {
+      const orgInfo = await api.getOrg();
+      setOrg(orgInfo);
+    } catch {
+      setOrg(null);
+    }
+  }, []);
 
   useEffect(() => {
     // Try a silent refresh so a page reload keeps the session.
     (async () => {
       try {
         await api.refresh();
-        setUser(await api.me());
+        const me = await api.me();
+        setUser(me);
+        await loadOrg();
       } catch {
         setTokens(null, null);
       } finally {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [loadOrg]);
 
   const login = useCallback(async (email: string, password: string, totp?: string) => {
     await api.login(email, password, totp);
-    setUser(await api.me());
-  }, []);
+    const me = await api.me();
+    setUser(me);
+    await loadOrg();
+  }, [loadOrg]);
 
   const register = useCallback(async (email: string, password: string) => {
     await api.register(email, password);
     await api.login(email, password);
-    setUser(await api.me());
-  }, []);
+    const me = await api.me();
+    setUser(me);
+    await loadOrg();
+  }, [loadOrg]);
 
   const logout = useCallback(async () => {
     await api.logout();
     setUser(null);
+    setOrg(null);
   }, []);
 
+  const role = org?.role ?? null;
+
   const value = useMemo(
-    () => ({ user, loading, login, register, logout }),
-    [user, loading, login, register, logout],
+    () => ({ user, org, role, loading, login, register, logout, refreshOrg: loadOrg }),
+    [user, org, role, loading, login, register, logout, loadOrg],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
