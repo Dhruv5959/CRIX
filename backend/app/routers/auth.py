@@ -31,6 +31,7 @@ from app.rate_limit import (
     password_reset_limiter,
     register_limiter,
 )
+from app.routers.accounts import ensure_registered_email_account
 from app.routers.org import create_organization
 from app.schemas import (
     LoginRequest,
@@ -143,6 +144,9 @@ def register(
     db.commit()
 
     audit.record(db, action="register.success", user_id=user.id, ip_address=client_ip(request))
+    # Feature A: the registered work email becomes a first-class signal
+    # account, so the four signal features are usable without manual setup.
+    ensure_registered_email_account(db, user)
     return user
 
 
@@ -188,6 +192,9 @@ def login(
             )
 
     audit.record(db, action="login.success", user_id=user.id, ip_address=client_ip(request))
+    # Feature A backfill: users registered before the registered-email account
+    # existed (e.g. the seeded demo org) get theirs on first login.
+    ensure_registered_email_account(db, user)
     return _issue_session(db, user, request, response, settings)
 
 

@@ -34,13 +34,17 @@ def list_accounts(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ) -> list[ConnectedSignal]:
-    return list(
+    # The registered-email account deliberately sorts first (newest first
+    # otherwise) so the UI can default-select the caller's own work email.
+    rows = list(
         db.scalars(
             select(ConnectedSignal)
             .where(ConnectedSignal.user_id == current_user.id)
             .order_by(ConnectedSignal.created_at.desc())
         ).all()
     )
+    rows.sort(key=lambda a: a.account_id != SELF_ACCOUNT_ID)
+    return rows
 
 
 @router.post("", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
@@ -88,6 +92,41 @@ def _get_owned_account(db: Session, user_id: str, account_id: str) -> ConnectedS
         # 404 (not 403) so we don't confirm existence of another user's account.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found.")
     return account
+
+
+SELF_ACCOUNT_ID = "registered-email"
+
+
+def ensure_registered_email_account(db: Session, user: User) -> None:
+    """Idempotently create the caller's "own work email" account.
+
+    Feature A: CRIX already knows the registered work email from the database,
+    so every user always has a signal account for it — all four signal features
+    are usable immediately at login, without manually connecting anything.
+    Extra accounts can still be added (and this one behaves like any other
+    account for breach/hygiene/phishing/permission signals).
+    """
+    existing = db.scalar(
+        select(ConnectedSignal).where(
+            ConnectedSignal.user_id == user.id, ConnectedSignal.account_id == SELF_ACCOUNT_ID
+        )
+    )
+    if existing is not None:
+        return
+    db.add(
+        ConnectedSignal(
+            user_id=user.id,
+            org_id=_resolve_org_id(db, user.id),
+            account_id=SELF_ACCOUNT_ID,
+            label="Your work email",
+            service_name="CRIX",
+            platform="registered",
+            email=user.email,
+            source="registered",
+            metadata_json={"registered_email": True},
+        )
+    )
+    db.commit()
 
 
 @router.get("/{account_id}", response_model=AccountResponse)

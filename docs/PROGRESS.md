@@ -507,4 +507,32 @@ single-worker uvicorn is the supported deployment (startup now prints this).
 * No OAuth/config change, no tenant-scope change, no plaintext secrets; `.env`
   stays untracked.
 
+---
+
+## Registered-email signal account (Feature A wiring, 2026-10-24)
+
+The screenshot-driven request: at login, all four Signals features must be
+usable for the user's registered work email — the old page gated everything
+behind manually connecting an account first.
+
+* **Backend:** every user now idempotently gets a `registered-email` signal
+  account (label "Your work email", `source=registered`, created at
+  registration and backfilled at login for existing users — `accounts.py`,
+  `auth.py`). It is a first-class analog of any connected account for
+  breach/hygiene/phishing/permission signals; extra accounts can still be
+  added. `GET /api/accounts` sorts it first so the UI can default-select it.
+* **Frontend (`SignalsPage.tsx`, no redesign):** the self account is selected
+  by default (the "Connect an account first" wall only remains if a user truly
+  has zero accounts); the breach email field is prefilled from the selected
+  account's email; the breach tab shows the most recent stored lookup for that
+  account immediately (honest states only — `NOT_CHECKED` when none exists).
+* **Tests:** backend **444 passed** (+4 in `test_registered_email_account.py`;
+  the one outdated "empty account list" IDOR assertion was sharpened to the
+  stronger invariant — B sees only B's self account, never A's data).
+  Frontend: `tsc` 0 / `vitest` 31/31 / `build` exit 0.
+* **Live verification:** demo login backfills the account, sorted first; a
+  real keyless XposedOrNot run against it recorded `BREACH_EXPOSURE=FINDING`
+  + `IDENTITY_EXPOSED=FINDING` (`source_mode=REAL`), both events stored against
+  the self account.
+
 *(Phase 8+ entries appended when those phases complete.)*

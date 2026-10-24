@@ -15,6 +15,11 @@ import { cn } from "@/lib/utils";
 const TABS = ["Breach / Exposure", "Password Hygiene", "Phishing", "Permissions"] as const;
 type Tab = (typeof TABS)[number];
 
+// The account the backend guarantees for every user: their registered work
+// email. It makes all four signal features usable at login (no manual setup),
+// while extra accounts can still be connected below it.
+const SELF_ACCOUNT_ID = "registered-email";
+
 function AccountManager({
   accounts,
   selected,
@@ -75,13 +80,17 @@ function AccountManager({
                     {a.service_name || "service"} · {a.email || "no email"}
                   </div>
                 </button>
-                <button
-                  className="text-ink-faint hover:text-rose-300"
-                  onClick={() => api.deleteAccount(a.account_id).then(onChanged)}
-                  aria-label="delete"
-                >
-                  <Trash2 size={14} />
-                </button>
+                {/* The registered-email account is recreated on the next login,
+                    so deleting it would be a illusion of control. */}
+                {a.account_id !== SELF_ACCOUNT_ID && (
+                  <button
+                    className="text-ink-faint hover:text-rose-300"
+                    onClick={() => api.deleteAccount(a.account_id).then(onChanged)}
+                    aria-label="delete"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -120,8 +129,14 @@ export default function SignalsPage() {
 
   const load = () =>
     api.listAccounts().then((list) => {
-      setAccounts(list);
-      if (!selected && list.length) setSelected(list[0].account_id);
+      // The registered work email sorts first and is selected by default, so
+      // the four feature tabs work immediately after login.
+      const ordered = [...list].sort(
+        (a, b) =>
+          Number(a.account_id !== SELF_ACCOUNT_ID) - Number(b.account_id !== SELF_ACCOUNT_ID),
+      );
+      setAccounts(ordered);
+      setSelected((prev) => prev ?? ordered[0]?.account_id ?? null);
     });
 
   useEffect(() => {
@@ -171,7 +186,7 @@ export default function SignalsPage() {
           )}
 
           {selected && tab === "Breach / Exposure" && (
-            <BreachForm accountId={selected} onDone={push} />
+            <BreachForm accountId={selected} accounts={accounts} onDone={push} />
           )}
           {selected && tab === "Password Hygiene" && (
             <HygieneForm accountId={selected} accounts={accounts} onDone={push} />
@@ -199,12 +214,56 @@ export default function SignalsPage() {
   );
 }
 
-function BreachForm({ accountId, onDone }: { accountId: string; onDone: (m: string) => void }) {
+function BreachForm({
+  accountId,
+  accounts,
+  onDone,
+}: {
+  accountId: string;
+  accounts: Account[];
+  onDone: (m: string) => void;
+}) {
   const [email, setEmail] = useState("");
   const [exposure, setExposure] = useState<"NONE" | "SESSION_ONLY" | "PASSWORD_AND_SESSION">("NONE");
   const [mfaBypass, setMfaBypass] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<SecurityEvent[] | null>(null);
+  // Most recent stored check for this account, shown right after login so the
+  // registered work email has an answer on screen without re-running a call.
+  const [stored, setStored] = useState<SecurityEvent[] | null>(null);
+  const [prefilledFor, setPrefilledFor] = useState<string | null>(null);
+
+  const account = accounts.find((a) => a.account_id === accountId);
+
+  // Prefill the check target with the selected account's email (your work
+  // email is prefilled by default). Prefills exactly once per selected
+  // account, so a value you typed is never silently overwritten.
+  useEffect(() => {
+    const a = accounts.find((x) => x.account_id === accountId);
+    if (a?.email && prefilledFor !== accountId) {
+      setEmail(a.email);
+      setPrefilledFor(accountId);
+    }
+  }, [accountId, accounts, prefilledFor]);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .events()
+      .then((res) => {
+        if (!alive) return;
+        const mine = res.events
+          .filter(
+            (e) => e.account_id === accountId && (e.event_type === "BREACH_EXPOSURE" || e.event_type === "IDENTITY_EXPOSED"),
+          )
+          .sort((a, b) => (a.detected_at < b.detected_at ? 1 : -1));
+        setStored(mine.length ? mine : null);
+      })
+      .catch(() => alive && setStored(null));
+    return () => {
+      alive = false;
+    };
+  }, [accountId]);
 
   async function run() {
     setBusy(true);
@@ -216,6 +275,7 @@ function BreachForm({ accountId, onDone }: { accountId: string; onDone: (m: stri
         simulated_mfa_bypass_capable: mfaBypass,
       });
       setResult(res.events);
+      setStored(null);
       const summary = summarizeBreachLookup(res.events);
       const simulated = res.events.some((e) => e.event_type === "SESSION_EXPOSURE");
       onDone(
@@ -226,6 +286,8 @@ function BreachForm({ accountId, onDone }: { accountId: string; onDone: (m: stri
       setBusy(false);
     }
   }
+
+  const shownEvents = result ?? stored;
 
   return (
     <Card>
@@ -241,8 +303,10 @@ function BreachForm({ accountId, onDone }: { accountId: string; onDone: (m: stri
           <Label>Email to check for breaches</Label>
           <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
           <p className="mt-1 text-[11px] text-ink-faint">
-            A real lookup, sent through the CRIX backend — you are never redirected to the
-            provider. The provider that answers is named with the result; if it cannot be
+            {account?.email
+              ? `Prefilled with the selected account's email (${account.email}). Change it to check another address you control.`
+              : "A real lookup, sent through the CRIX backend — you are never redirected to the provider."}{" "}
+            The provider that answers is named with the result; if it cannot be
             consulted, the answer is UNKNOWN, never "safe".
           </p>
         </div>
@@ -271,7 +335,18 @@ function BreachForm({ accountId, onDone }: { accountId: string; onDone: (m: stri
         <Button variant="primary" onClick={run} disabled={busy || !email}>
           <Radar size={14} /> {busy ? "Checking…" : "Run breach check"}
         </Button>
-        {result && <BreachResult summary={summarizeBreachLookup(result)} />}
+        {shownEvents ? (
+          <div className="space-y-1">
+            {!result && stored && (
+              <p className="text-[11px] text-ink-faint">
+                Most recent stored check for this account (no new provider call).
+              </p>
+            )}
+            <BreachResult summary={summarizeBreachLookup(shownEvents)} />
+          </div>
+        ) : (
+          <BreachResult summary={summarizeBreachLookup([])} />
+        )}
       </CardBody>
     </Card>
   );

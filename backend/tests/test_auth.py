@@ -77,7 +77,10 @@ def test_idor_user_cannot_read_other_account(client):
     b_headers = {"Authorization": f"Bearer {b['access_token']}"}
     listing = client.get("/api/accounts", headers=b_headers)
     assert listing.status_code == 200
-    assert listing.json() == []
+    # B legitimately has exactly their own registered-email account (Feature A);
+    # the IDOR invariant is that nothing belonging to A leaks to B.
+    assert [row["account_id"] for row in listing.json()] == ["registered-email"]
+    assert all(row["email"] == "b@example.com" for row in listing.json())
 
     direct = client.get("/api/accounts/acct-A", headers=b_headers)
     assert direct.status_code == 404  # not found for B, existence not confirmed
