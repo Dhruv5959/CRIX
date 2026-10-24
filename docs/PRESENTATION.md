@@ -2,7 +2,7 @@
 
 > A rehearsal script for presenting the capstone. Contains a slide outline, a
 > click-by-click live demo, the exact numbers to cite, examiner Q&A with honest
-> answers, and a backup plan. Last updated: 2026-10-08.
+> answers, and a backup plan. Last updated: 2026-10-25.
 
 ---
 
@@ -47,7 +47,15 @@ Then open **http://localhost:5173** and log in once to confirm it loads:
 
 Quick route check before presenting: **Live Connections** (`/connections`) and
 **Propagation** (`/propagation`) both load, and all three providers read
-`NOT_CONFIGURED` — that is *expected* and is itself a talking point.
+`NOT_CONFIGURED` — that is *expected* and is itself a talking point (live
+OAuth is deliberately frozen in this build per the spec's §12 freeze).
+
+**The two breach/password providers are keyless** (XposedOrNot for email
+lookups, HIBP Pwned Passwords for the password corpus), so no API keys are
+needed — but the *live* Signal lookups need internet. On a dead connection
+they show **UNAVAILABLE** honestly instead of a verdict, which is correct
+behavior and a talking point, not a failure. A login with the provider down
+is never blocked — it just records the honest outcome.
 
 **Fallback if Wi-Fi/laptop fails:** keep the `datasets/` folder and
 `docs/` open, plus the README. You can screen-share the Markdown and still tell
@@ -63,25 +71,34 @@ the whole story without the running app.
 3. **The idea (thesis)** — connect signals → prioritize → explain → recommend.
    Draw the pipeline as one arrow diagram (see README).
 4. **Architecture** — React → FastAPI → Signal Modules → Normalizer →
-   Correlation → Risk → Shapley → Graph → Planner → GraphRAG → Dashboard.
+    Correlation → Risk → Shapley → Graph → Planner → GraphRAG → Dashboard.
 5. **Honesty policy** — real vs simulated vs unavailable; no fabricated metrics;
-   deterministic engine decides, GraphRAG explains. *(This slide earns marks.)*
-6. **Live connections, honestly scoped** — official OAuth + PKCE + encrypted
-   tokens; but a connection proves a *relationship*, not security posture —
-   capability matrix marks what the API won't expose as
-   `UNAVAILABLE_THROUGH_PROVIDER`, and relationships are user-confirmed.
-7. **Compromise propagation** — a defensive what-if with a documented exposure
-   formula; relative prioritization, explicitly not a probability.
-8. **Live demo** — see §3 below.
-9. **How the risk engine works** — `risk = asset criticality × (base +
-   interaction) − mitigation`; non-additive compounding is the thesis, and the
-   company's own asset importance is a documented, bounded input.
-10. **Transparent attribution** — exact Shapley; contributions sum to the total.
-11. **Prioritization** — greedy **baseline** vs exact branch-and-bound; measured
+    deterministic engine decides, GraphRAG explains. *(This slide earns marks.)*
+6. **SMB features, consent-first** — the registered work email works out of the
+    box; automatic breach monitoring only after an affirmative, timestamped
+    consent; a >24h cache so the provider is not hammered at every login; the
+    login password is checked server-side with k-anonymity (5-char SHA-1 prefix
+    only) and the outcome is recorded honestly — never blocking a login. A
+    placeholder-style address (never a real mailbox) gets an explicit
+    "not evidence" note.
+7. **Live connections, honestly scoped** — official OAuth + PKCE + encrypted
+    tokens; but a connection proves a *relationship*, not security posture —
+    capability matrix marks what the API won't expose as
+    `UNAVAILABLE_THROUGH_PROVIDER`, and relationships are user-confirmed.
+    (In this build live OAuth is frozen per spec §12 — the code path is real
+    and gated off.)
+8. **Compromise propagation** — a defensive what-if with a documented exposure
+    formula; relative prioritization, explicitly not a probability.
+9. **Live demo** — see §3 below.
+10. **How the risk engine works** — `risk = asset criticality × (base +
+    interaction) − mitigation`; non-additive compounding is the thesis, and the
+    company's own asset importance is a documented, bounded input.
+11. **Transparent attribution** — exact Shapley; contributions sum to the total.
+12. **Prioritization** — greedy **baseline** vs exact branch-and-bound; measured
     gap; a deliberately constructed greedy trap.
-12. **Evaluation** — real measured metrics (phishing F1, Shapley efficiency, etc.).
-13. **Security of CRIX itself** — its own login/auth hardening + the §14 checklist.
-14. **Limitations & future work** — say them before the examiner does.
+13. **Evaluation** — real measured metrics (phishing F1, Shapley efficiency, etc.).
+14. **Security of CRIX itself** — its own login/auth hardening + the §14 checklist.
+15. **Limitations & future work** — say them before the examiner does.
 
 ---
 
@@ -95,13 +112,43 @@ Do it in this exact order. Each step names the page and the *one thing to say*.
   events across the connected accounts. CRIX collapses that into one contextual
   risk score: **69.5, HIGH**, with a sensitivity range of **63–78**.
   Notice it's a *relative prioritization*, not a probability."
+- **Note:** that login also ran a live Pwned-Passwords check of the demo user's
+  password (server-side, k-anonymity). It recorded an honest outcome — and it
+  did **not** block authentication. You'll show that banner in Step 1b.
+
+### Step 1b — Feature A/B: consent-gated monitoring + honest password outcome
+- **Do:** go to **Signals → Breach / Exposure** (the "Your work email" account
+  is pre-selected). Show the **Automatic breach monitoring** panel.
+- **Say:** "Every user gets their registered work email as a signal account
+  automatically — the four signal features work at first login, no setup. This
+  switch is *consent*: we never auto-check anyone's address without an
+  affirmative opt-in, and we store the consent with a timestamp. When it's on,
+  CRIX re-checks at sign-in **only if the last check is older than 24 hours** —
+  watch it: the 'Last automatic check' line is the honest cache; a fresh login
+  costs the provider zero calls."
+- **Do:** toggle it on — the first lookup runs immediately and events appear
+  for the registered-email account. If you demo on a placeholder-style address
+  (`.invalid`/`example.com`/`test`), the result card carries a written note:
+  *this address was never a real monitored mailbox, so the verdict is not
+  evidence*. Toggle off to revoke — live.
+- **Do:** open the **Password Hygiene** tab and point at the banner at the top.
+- **Say:** "Feature B. Every sign-in, CRIX checks the just-verified password
+  against the Pwned Passwords corpus — server-side, sending only a 5-character
+  SHA-1 prefix (k-anonymity; the hash and the plaintext never leave). The
+  outcome is named here with the provider and time: this demo login's password
+  is genuinely in the breach corpus — twice — yet login was **not** blocked;
+  we warn and store, never fabricate. If a corpus check is unavailable, the
+  banner says UNKNOWN — never 'safe'. Try registering with something like
+  `sunshine123`: the server refuses it with the real corpus count."
 
 ### Step 2 — Connected Signals (`/signals`)
-- **Say:** "Every finding carries provenance. **REAL** means it came from the HIBP
-  API. **SIMULATED** means the user constructed the scenario — for example the
-  session-cookie exposure, which we label 'simulated exposure scenario'. And
-  **UNAVAILABLE** means we couldn't run the check — which is never shown as
-  'safe'. That distinction is a core rule of this project."
+- **Say:** "Every finding carries provenance. **REAL** means a live provider
+  answered — for email breaches that's XposedOrNot (and HIBP when its key is
+  configured; both free, no credentials stored). **SIMULATED** means the user
+  constructed the scenario — for example the session-cookie exposure, which we
+  label 'simulated exposure scenario'. And **UNAVAILABLE** means we couldn't
+  run the check — which is never shown as 'safe'. That distinction is a core
+  rule of this project."
 
 ### Step 3 — Live Connections (`/connections`)
 - **Do:** show the three provider cards (Google, LinkedIn, Instagram
@@ -209,9 +256,13 @@ Do it in this exact order. Each step names the page and the *one thing to say*.
 | Shapley max efficiency error | **2.0×10⁻⁹** | `run_evaluation.py` |
 | Shapley mean compute time | **~100 ms** (13 features) | `run_evaluation.py` |
 | Correlation rules exercised | **8 / 8** | `run_evaluation.py` |
-| Backend tests passing | **403** | `pytest` |
-| Frontend tests passing | **31** | `vitest` |
-| End-to-end smoke checks | **54 / 54 green** | `scripts/smoke.py` |
+| Backend tests passing | **451** (verified 2026-10-25) | `pytest` |
+| Frontend tests passing | **33** | `vitest` |
+| End-to-end smoke checks | **46 green, 0 fail** (verified 2026-10-25) | `scripts/smoke.py` |
+| Feature B live block (registration) | `sunshine123` → HTTP 422, *"appears **83,270** times in known breach data"* | live run 2026-10-25, HIBP corpus |
+| Feature B live login outcome | demo password → `PWNED, count=2`; auth NOT blocked | `/api/auth/me` after demo login, 2026-10-25 |
+| Feature A cache | consent-gated auto-refresh **>24h**; re-login inside window = **zero provider calls** | verified live 2026-10-25 |
+| Breach email providers | **XposedOrNot** (default, keyless) + HIBP if key configured | `/api/health` provider field |
 | Propagation formula factors | **5** (dependency × criticality × weakness × path − mitigation) | `engine/propagation.py` `PROPAGATION_PARAMS` |
 | `source_mode` values | **5** (`REAL` / `USER_PROVIDED` / `SIMULATED` / `FIXTURE` / `UNAVAILABLE`) | `schemas.SourceMode` |
 
@@ -223,10 +274,13 @@ percentage. If you don't know, say *"I'd have to check the evaluation output."*
 ## 5. Examiner Q&A — anticipate these
 
 **Q: Is this real data?**
-A: Mixed, and labeled per-signal. Breach checks are REAL (HIBP API). The phishing
-corpus is SYNTHETIC and explicitly labeled — I can't legally redistribute a real
-phishing corpus, and I won't fabricate "real" metrics. The metrics measure
-generalization on a synthetic disjoint-template split, not real-world accuracy.
+A: Mixed, and labeled per-signal. Email-breach checks hit real providers —
+XposedOrNot by default, HIBP when its key is configured; both keyless-class
+integrations, and the provider that actually answered is named on every
+result. The phishing corpus is SYNTHETIC and explicitly labeled — I can't
+legally redistribute a real phishing corpus, and I won't fabricate "real"
+metrics. The metrics measure generalization on a synthetic disjoint-template
+split, not real-world accuracy.
 
 **Q: Why is the phishing F1 only 0.83?**
 A: Because it's an honest held-out evaluation on *unseen templates*, not the
@@ -279,17 +333,50 @@ only receives sanitized context, and every statement cites an edge or engine
 output. A validator flags unsupported claims and it reported zero.
 
 **Q: What about plaintext passwords?**
-A: They never leave the browser. The client SHA-1s the password, sends only the
-first 5 hex chars to a k-anonymity range proxy, and matches locally. An automated
-test inspects outgoing requests and fails the build if plaintext appears.
+A: At no point do they leave the browser *or* CRIX. Two paths, same rule:
+(a) the Signals page has a client-side k-anonymity check — the browser SHA-1s
+the password and sends only the first 5 hex characters; (b) since CRIX
+legitimately *holds* your password at registration and sign-in, the server
+hashes it transiently and likewise sends only the 5-char prefix to Pwned
+Passwords. The stored outcome is provider/status/count/time metadata — the
+plaintext and its hash are stored nowhere, and a test asserts no password
+material can appear in any response. An automated suite also fails the build
+if any network call could leak it.
+
+**Q: How does the automatic breach monitoring respect the user? (Feature A)**
+A: Consent-first. Nothing happens automatically until the user turns the
+switch on; the opt-in is stored with a timestamp and can be revoked. When
+consenting, the first lookup runs immediately; afterwards the lookups happen
+only at sign-in and only when the last check is over 24 hours old — otherwise
+the login shows the stored result and makes zero provider calls. A down
+provider is recorded as UNKNOWN with the stamp still updated, so sign-in is
+never blocked and the cache never lies.
+
+**Q: What happens with a fake or placeholder email?**
+A: Honesty, by design. If an address uses a placeholder-style domain
+(`example.com`, `.invalid`, `.test`, …), CRIX still runs the lookup (that's
+the factual part) but marks every resulting event with an explicit warning:
+the mailbox was never a real monitored account, so the verdict is shown for
+transparency — it is neither "safe" nor evidence of a breach. No fake
+conclusions from invented inputs.
+
+**Q: What is actually finished?**
+A: A tagged history covers Phases 1–7 plus the SMB org-model migration and the
+recent security hardening; the Feature A/B consent flows are tested and
+committed. Later milestone phases are documented as future work — I will not
+claim completion beyond what the commits and the test suites show. The
+evaluation page only shows what was actually measured. (Also honest: the rate
+limiter is in-process, so this is a single-worker deployment; PostgreSQL runs
+in production, the whole suite runs on SQLite here.)
 
 **Q: What's the weakest part?**
 A: Being honest up front is a strength. Tiered: (1) synthetic ML corpus — a real
 corpus is future work; (2) curated graphs are static and go stale; (3) the risk
-weights are expert-set, not empirically calibrated; (4) live OAuth reports
-`NOT_CONFIGURED` until the team registers its own provider apps — the code path
-is real, and a clearly-labeled `FIXTURE` connector lets the propagation demo run
-without credentials. All are documented in `docs/IMPLEMENTATION_STATUS.md`.
+weights are expert-set, not empirically calibrated; (4) live OAuth is frozen in
+this build per the spec's §12 freeze — the connector code path is real and
+tested, but no provider is configured until the freeze is lifted, and
+clearly-labeled `FIXTURE` connectors let the propagation demo run without
+credentials. All are documented in `docs/IMPLEMENTATION_STATUS.md`.
 
 ---
 
@@ -298,9 +385,13 @@ without credentials. All are documented in `docs/IMPLEMENTATION_STATUS.md`.
 Use: **"contextual risk score," "relative risk prioritization," "transparent
 attribution."**
 
+Also, for the Signal features: **"consent-gated," "k-anonymity," "recorded
+outcome," "not meaningful for a placeholder mailbox."**
+
 Never say: "predicts hacking," "prevents account takeover," "probability of being
-hacked." If asked to predict an attack, redirect: *"CRIX prioritizes relative
-risk; it deliberately does not claim to predict events."*
+hacked," "checked everything," or "provider said safe." If asked to predict an
+attack, redirect: *"CRIX prioritizes relative risk; it deliberately does not
+claim to predict events."*
 
 ---
 
@@ -310,15 +401,16 @@ risk; it deliberately does not claim to predict events."*
 |---|---|
 | Pitch + problem + thesis | 2 |
 | Architecture + honesty policy | 2 |
-| Live demo | 15–18 |
+| Live demo | 16–19 |
 | Evaluation + security | 2 |
 | Limitations & future work | 1 |
 | Q&A | remainder |
 
 If short on time, cut Step 11 (Knowledge Graph) and the What-If toggle; keep
-Overview → Correlations → Risk → Remediation → Explanation. If you have extra
-time, keep Connections + Propagation — they're the strongest "honesty under
-pressure" story in the deck.
+Overview → Step 1b (consent + honest outcomes) → Correlations → Risk →
+Remediation → Explanation. Step 1b is the strongest "SMB features done right"
+evidence — do not cut that one. If you have extra time, keep Connections +
+Propagation — they're the strongest "honesty under pressure" story in the deck.
 
 ---
 
@@ -327,7 +419,9 @@ pressure" story in the deck.
 - **App won't load:** present from `README.md` + `docs/ARCHITECTURE.md` +
   `docs/SECURITY.md` + `docs/IMPLEMENTATION_STATUS.md` and the `datasets/` folder.
   The story and every number still hold.
-- **HIBP key missing:** breach checks show **UNAVAILABLE** — that's *correct and
-  expected*, and it's a talking point (couldn't-check ≠ safe), not a failure.
+- **No internet:** every live lookup shows **UNAVAILABLE** — that's *correct
+  and expected*, and itself a talking point (couldn't-check ≠ safe). A login
+  with providers down still succeeds and records the honest outcome; nothing
+  blocks, nothing is fabricated.
 - **Evaluation page empty:** run `run_evaluation.py` before presenting, or explain
   that empty means "not yet measured" by design.

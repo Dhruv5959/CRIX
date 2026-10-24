@@ -536,3 +536,52 @@ behind manually connecting an account first.
   the self account.
 
 *(Phase 8+ entries appended when those phases complete.)*
+
+---
+
+## Feature A/B: consent-gated breach monitoring + password-exposure outcomes (2026-10-25)
+
+Per the integration spec (Features A + B), wired end-to-end with the honesty
+rules intact (commit `c24ba35`).
+
+* **Feature A — consent before automatic monitoring.** `users` gains
+  `breach_monitor_consent(+_at)` and `last_breach_check_at` (NOT NULL consent is
+  a DB-level default of 0 — never a silent default; alembic revision
+  `e8f9a0b1c2d3` keeps the prod chain honest). `POST
+  /api/signals/breach/monitor/consent` stores opt-in/out with a timestamp;
+  enabling runs the first lookup immediately. Consented users auto-refresh at
+  login **only when the last check is >24h old** — within the window the login
+  shows the stored result and makes zero provider calls (verified live). Any
+  outcome (FINDING / CHECKED_SAFE / UNAVAILABLE) refreshes the stamp; a manual
+  registered-email lookup also stamps the cache. A provider outage never
+  blocks authentication.
+* **Feature B — password exposure at register/login.** The password CRIX
+  legitimately holds is checked server-side against Pwned Passwords:
+  SHA-1 hashed transiently, **only the 5-character k-anonymity prefix leaves
+  CRIX**, plaintext is stored nowhere. A corpus hit (>0) rejects registration
+  with HTTP 422 and an actionable message (live-verified: `sunshine123` →
+  *"appears 83,270 times in known breach data"*); an unreachable provider
+  records `UNAVAILABLE` and follows the policy fallback — never "safe". Login
+  records the outcome (`provider/status/count/checked_at`) and **never blocks
+  authentication** (live-verified: the demo login itself recorded
+  `PWNED, count=2` and still succeeded).
+* **Placeholder-address honesty.** Because demo accounts commonly use
+  `.invalid`/`example.com`-style addresses, every breach/identity event for a
+  placeholder-style domain carries `metadata.address_warning`: the mailbox was
+  never a real monitored account, so the verdict is neither "safe" nor
+  evidence. Surfaced in the result card and in the monitor panel.
+* **UI (design unchanged).** Register form gets an optional consent switch
+  (off by default); the Breach tab gets a monitor panel (consent switch, last
+  automatic check, 24h cadence, honesty note) on the self account; the
+  Password Hygiene tab shows the last-login outcome banner for
+  PWNED / UNAVAILABLE / NOT_IN_CORPUS with the provider named. Reused existing
+  components only.
+* **Tests.** New `backend/tests/test_features_ab.py` (7 tests: pwned-register
+  block, unavailable fallback + non-blocking login, login outcome overwrite,
+  consent stamp/first-check, revoke, cache suppression at login,
+  stale-refresh, placeholder warning). `conftest.py` now forbids network for
+  the HIBP client too, keeping the suite hermetic. Backend **451 passed** —
+  the migration suite's legacy-seed tests required the DB-level consent
+  default (fixed by the honest `server_default`, not by weakening any test).
+  Vitest **33 pass** (+2 for `address_warning`); `tsc`/build clean.
+  `scripts/smoke.py` re-run: 46 checks green.
