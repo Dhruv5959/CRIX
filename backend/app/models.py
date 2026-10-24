@@ -74,6 +74,25 @@ class User(Base, TimestampMixin):
     totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Feature A: affirmative consent for automatic breach monitoring of the
+    # registered work email. Never enabled silently — stored with a timestamp.
+    # The DB-level default keeps every writer (raw SQL seeds included) honest:
+    # no consent is the *stored* state, not just an ORM-level convenience.
+    breach_monitor_consent: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="0"
+    )
+    breach_monitor_consent_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Honest caching stamps (Feature A+B): the *outcomes* live as normalized
+    # security events; the user row only records WHEN we last checked and the
+    # login-time password-exposure outcome metadata (never any password or
+    # hash material).
+    last_breach_check_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_password_exposure: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )

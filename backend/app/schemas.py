@@ -74,6 +74,9 @@ class RegisterRequest(BaseModel):
     # Registration creates the organization; the registrant becomes its first
     # ORG_ADMIN (§4). Optional so an existing client still works.
     org_name: str | None = Field(default=None, max_length=200)
+    # Feature A: affirmative opt-in for automatic breach monitoring of the
+    # registered work email. Stored with a timestamp; never turned on silently.
+    breach_monitor_consent: bool = False
 
 
 class LoginRequest(BaseModel):
@@ -97,6 +100,10 @@ class UserResponse(BaseModel):
     is_active: bool
     email_verified: bool
     totp_enabled: bool
+    # Feature A / B outcome metadata (never password or hash material).
+    breach_monitor_consent: bool
+    last_breach_check_at: dt.datetime | None
+    last_password_exposure: dict[str, Any] | None
     created_at: dt.datetime
 
 

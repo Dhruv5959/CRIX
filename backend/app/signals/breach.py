@@ -266,6 +266,14 @@ def check_breach(
             )
         )
 
+    # Honesty: a placeholder-style address ("no real email") cannot yield a
+    # meaningful provider verdict — the mailbox was never real. The events are
+    # still produced (the lookup happened), but every one carries the warning.
+    note = placeholder_address_warning(email)
+    if note:
+        for schema in out:
+            schema.metadata = {**schema.metadata, "address_warning": note}
+
     return out
 
 
@@ -276,6 +284,26 @@ def _base_metadata(lookup: EmailBreachLookup) -> dict:
         "provider_label": provider_label(lookup.provider),
         "checked_at": lookup.checked_at.isoformat(),
     }
+
+
+# RFC 2606/6761/6762 special-use + common placeholder suffixes.
+_PLACEHOLDER_TLDS = {"example", "invalid", "test", "localhost", "local", "lan", "home", "domain"}
+_PLACEHOLDER_DOMAINS = {"example.com", "example.org", "example.net", "example.edu"}
+
+
+def placeholder_address_warning(email: str) -> str | None:
+    """Honesty guard for the "no real email" case: a placeholder-style address
+    was never a monitored mailbox, so ANY provider verdict on it (including a
+    sweep of matches) is not evidence about a real account."""
+    domain = email.rsplit("@", 1)[-1].lower().strip()
+    tld = domain.rsplit(".", 1)[-1]
+    if domain in _PLACEHOLDER_DOMAINS or tld in _PLACEHOLDER_TLDS:
+        return (
+            "This address uses a placeholder-style domain, so the lookup is not "
+            "meaningful: the mailbox was never a real monitored account. Shown "
+            "for transparency only — treat it as neither safe nor a real breach."
+        )
+    return None
 
 
 def _breach_event(

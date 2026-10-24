@@ -1,9 +1,16 @@
 import { useEffect, useState } from "react";
 import { Plus, ShieldCheck, Trash2, Radar } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { checkPasswordPwned, passwordsMatch } from "@/lib/password";
-import { summarizeBreachLookup } from "@/lib/breach";
-import type { Account, PhishingResult, SecurityEvent } from "@/lib/types";
+import { formatCheckedAt, summarizeBreachLookup } from "@/lib/breach";
+import type {
+  Account,
+  BreachMonitorStatus,
+  PasswordExposureOutcome,
+  PhishingResult,
+  SecurityEvent,
+} from "@/lib/types";
 import { BreachResult } from "@/components/BreachResult";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -214,6 +221,133 @@ export default function SignalsPage() {
   );
 }
 
+// Feature A: consent + state for automatic breach monitoring of the account
+// every user gets at registration — their registered work email. Consent gates
+// the automatic sign-in lookup (run only when the last check is >24h old);
+// this panel shows state, never a verdict on a password.
+function BreachMonitorPanel({ onDone }: { onDone: (m: string) => void }) {
+  const { refreshUser } = useAuth();
+  const [status, setStatus] = useState<BreachMonitorStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .monitorStatus()
+      .then((s) => alive && setStatus(s))
+      .catch(() => alive && setStatus(null));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function toggle(enabled: boolean) {
+    setBusy(true);
+    try {
+      const next = await api.setBreachMonitorConsent(enabled);
+      setStatus(next);
+      await refreshUser();
+      onDone(
+        enabled
+          ? next.last_breach_check_at !== null
+            ? "monitoring on — first recorded check stored for the registered email"
+            : "monitoring on — first check could not be consulted (recorded as UNKNOWN)"
+          : "monitoring off — automatic sign-in lookups stop",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="glass-sub rounded-lg p-3">
+      <Switch
+        checked={status?.enabled ?? false}
+        onChange={toggle}
+        label="Automatic breach monitoring"
+        disabled={busy || !status}
+        description={
+          "At sign-in, re-check your registered work email in breach data — only when the " +
+          "last check is older than 24h. Consent is stored with a timestamp; revoke anytime. " +
+          "Manual checks below never require this switch."
+        }
+      />
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-ink-faint">
+        <span>
+          Consent:{" "}
+          <span className="text-ink-muted">
+            {status?.enabled ? "granted" : "not granted"}
+          </span>
+        </span>
+        <span>
+          Last automatic check:{" "}
+          <span className="font-mono text-ink-muted">
+            {formatCheckedAt(status?.last_breach_check_at ?? null)}
+          </span>
+        </span>
+        <span>
+          Refresh cadence: <span className="text-ink-muted">24h (offline logs show as UNKNOWN)</span>
+        </span>
+      </div>
+      {status?.placeholder_domain && (
+        <p className="mt-2 text-[11px] leading-relaxed text-sky-200">
+          The registered address uses a placeholder-style domain, so any provider verdict on
+          it is shown for transparency — not evidence about a real monitored mailbox.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// Feature B: the outcome of the server-side Pwned-Passwords check of the
+// password entered at the LAST sign-in. Recorded, not re-tested: CRIX stores
+// no password material. Honest vocabulary — an unreachable provider is
+// UNAVAILABLE, never "safe".
+function PasswordExposureBanner() {
+  const { user } = useAuth();
+  const outcome: PasswordExposureOutcome | null = user?.last_password_exposure ?? null;
+  const who: Record<string, string> = {
+    "hibp-pwned-passwords": "HIBP Pwned Passwords",
+  };
+  const provider = outcome ? (who[outcome.provider] ?? outcome.provider) : "";
+  const when = outcome ? formatCheckedAt(outcome.checked_at) : "";
+
+  if (!outcome) {
+    return (
+      <p className="text-[11px] leading-relaxed text-ink-faint">
+        Login password check: the outcome of your next sign-in appears here. The check runs
+        server-side with k-anonymity (only a 5-character SHA-1 prefix is sent); CRIX stores
+        the outcome — never the password or its hash.
+      </p>
+    );
+  }
+  if (outcome.status === "PWNED") {
+    return (
+      <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] leading-relaxed text-rose-200">
+        <span className="font-semibold">Your last sign-in password appears in known breach data</span>
+        {" "}
+        ({outcome.count === null ? "multiple matches" : `${outcome.count.toLocaleString()} match${outcome.count === 1 ? "" : "es"}`}{" "}
+        via {provider}, {when}). Change it — and anywhere else it was reused — to something
+        unique, and enable MFA. This was recorded at sign-in; the password itself is never stored.
+      </div>
+    );
+  }
+  if (outcome.status === "UNAVAILABLE") {
+    return (
+      <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-200">
+        The breach-corpus check at your last sign-in could not be completed ({provider}, {when}).
+        Recorded as UNKNOWN — no conclusion was drawn, and no “safe” claim was made.
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] leading-relaxed text-emerald-200">
+      Your last sign-in password was not found in the breach corpus ({provider}, {when}).
+      A stored absence is not proof of safety — keep it unique to this account.
+    </div>
+  );
+}
+
 function BreachForm({
   accountId,
   accounts,
@@ -299,6 +433,7 @@ function BreachForm({
         </div>
       </CardHeader>
       <CardBody className="space-y-4">
+        {accountId === SELF_ACCOUNT_ID && <BreachMonitorPanel onDone={onDone} />}
         <div>
           <Label>Email to check for breaches</Label>
           <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
@@ -401,6 +536,7 @@ function HygieneForm({ accountId, accounts, onDone }: { accountId: string; accou
         <ProvenanceBadge provenance="USER_REPORTED" />
       </CardHeader>
       <CardBody className="space-y-5">
+        <PasswordExposureBanner />
         <div className="glass-sub rounded-lg p-3">
           <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-accent">
             <ShieldCheck size={13} /> Client-side password check

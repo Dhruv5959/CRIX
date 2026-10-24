@@ -8,6 +8,7 @@ import type {
   AdminView,
   AnalysisResult,
   AssetDependency,
+  BreachMonitorStatus,
   EvaluationSummary,
   Explanation,
   GraphPayload,
@@ -87,11 +88,12 @@ async function request<T>(
 
 export const api = {
   // --- auth ---
-  register: (email: string, password: string) =>
+  register: (email: string, password: string, breachMonitorConsent = false) =>
     request<User>("/api/auth/register", {
       method: "POST",
       auth: false,
-      body: JSON.stringify({ email, password }),
+      // Feature A: affirmative opt-in, stored server-side with a timestamp.
+      body: JSON.stringify({ email, password, breach_monitor_consent: breachMonitorConsent }),
     }),
   login: async (email: string, password: string, totp?: string) => {
     const data = await request<TokenResponse>("/api/auth/login", {
@@ -152,6 +154,15 @@ export const api = {
     request<{ events: SecurityEvent[] }>("/api/signals/breach", {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+  // Feature A: consent-gated automatic monitoring of the REGISTERED work email.
+  // Lookup runs at sign-in only when the last check is older than 24h; this
+  // status/consent pair carries state, never a verdict on a password.
+  monitorStatus: () => request<BreachMonitorStatus>("/api/signals/breach/monitor/status"),
+  setBreachMonitorConsent: (enabled: boolean) =>
+    request<BreachMonitorStatus>("/api/signals/breach/monitor/consent", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
     }),
   passwordHygiene: (payload: Record<string, unknown>) =>
     request<{ provider: unknown; events: SecurityEvent[] }>("/api/signals/password-hygiene", {

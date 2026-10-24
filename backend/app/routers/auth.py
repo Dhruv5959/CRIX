@@ -32,6 +32,7 @@ from app.rate_limit import (
     register_limiter,
 )
 from app.routers.accounts import ensure_registered_email_account
+from app.routers.breach import is_breach_check_stale, run_registered_email_check
 from app.routers.org import create_organization
 from app.schemas import (
     LoginRequest,
@@ -131,7 +132,27 @@ def register(
     except security.PasswordPolicyError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-    user = User(email=email, password_hash=password_hash)
+    # Feature B: the submitted password is checked against the Pwned Passwords
+    # corpus BEFORE an account is created. A compromised password blocks
+    # registration; an unavailable provider NEVER reports the password as safe
+    # and follows the password-policy fallback instead (registration proceeds,
+    # the check outcome is recorded for the user).
+    exposure = _record_password_exposure(db, None, payload.password)
+    if exposure["status"] == "PWNED":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"That password appears {exposure.get('count', 'multiple')} times in "
+                "known breach data. Please choose a different password."
+            ),
+        )
+
+    user = User(email=email, password_hash=password_hash, email_verified=False)
+    if payload.breach_monitor_consent:
+        # Affirmative opt-in with a timestamp (Feature A) — never a silent default.
+        user.breach_monitor_consent = True
+        user.breach_monitor_consent_at = dt.datetime.now(dt.timezone.utc)
+    user.last_password_exposure = exposure
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -155,6 +176,43 @@ def _default_org_name(email: str) -> str:
     domain = email.split("@", 1)[1] if "@" in email else email
     root = domain.split(".")[0]
     return root.replace("-", " ").replace("_", " ").title() or "My Company"
+
+
+# --------------------------------------------------------------------------- #
+# Feature B: password-exposure outcome recording (never blocks a login)
+# --------------------------------------------------------------------------- #
+def _record_password_exposure(db: Session, user: User | None, password: str) -> dict:
+    """Check a password CRIX legitimately holds against Pwned Passwords.
+
+    Only the 5-char SHA-1 prefix ever leaves CRIX (k-anonymity; §3.B). The
+    outcome metadata is recorded on the user — the plaintext and its hash are
+    kept nowhere. Every failure mode is recorded as UNAVAILABLE and NEVER as
+    "safe"; authentication NEVER fails because of provider trouble.
+    """
+    import datetime as _dt
+
+    from app.signals.hibp import HIBPUnavailable, pwned_password_count
+
+    outcome: dict = {
+        "provider": "hibp-pwned-passwords",
+        "status": "UNAVAILABLE",
+        "count": None,
+        "checked_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+    }
+    try:
+        count = pwned_password_count(password, timeout=8)
+        if count > 0:
+            outcome["status"] = "PWNED"
+            outcome["count"] = count
+        else:
+            outcome["status"] = "NOT_IN_CORPUS"
+    except Exception:
+        # Network trouble, rate limit, malformed response — recorded above.
+        pass
+    if user is not None:
+        user.last_password_exposure = outcome
+        db.commit()
+    return outcome
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -192,9 +250,19 @@ def login(
             )
 
     audit.record(db, action="login.success", user_id=user.id, ip_address=client_ip(request))
-    # Feature A backfill: users registered before the registered-email account
-    # existed (e.g. the seeded demo org) get theirs on first login.
+    # Feature B (login behavior): record how the just-verified password fared
+    # against the breach corpus. The dashboard surfaces UNAVAILABLE honestly;
+    # a PWNED result becomes an actionable warning. Login itself never blocks.
+    _record_password_exposure(db, user, payload.password)
+    # Feature A backfill + auto-refresh: legacy users get their registered-email
+    # account on first login; consented users get a stale (>24h) breach check.
     ensure_registered_email_account(db, user)
+    try:
+        if user.breach_monitor_consent and is_breach_check_stale(user):
+            run_registered_email_check(db, user, settings)
+    except Exception:
+        # A provider outage must never prevent authentication.
+        pass
     return _issue_session(db, user, request, response, settings)
 
 

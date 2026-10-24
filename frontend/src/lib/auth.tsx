@@ -19,9 +19,11 @@ interface AuthState {
   role: OrgRole | null;
   loading: boolean;
   login: (email: string, password: string, totp?: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, breachMonitorConsent?: boolean) => Promise<void>;
   logout: () => Promise<void>;
   refreshOrg: () => Promise<void>;
+  /** Re-read /me so Feature A/B outcome metadata stays fresh after actions. */
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -63,8 +65,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await loadOrg();
   }, [loadOrg]);
 
-  const register = useCallback(async (email: string, password: string) => {
-    await api.register(email, password);
+  const register = useCallback(async (email: string, password: string, breachMonitorConsent = false) => {
+    await api.register(email, password, breachMonitorConsent);
     await api.login(email, password);
     const me = await api.me();
     setUser(me);
@@ -77,11 +79,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setOrg(null);
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    try {
+      setUser(await api.me());
+    } catch {
+      // Keep the current user state on a transient failure; nothing rewrites
+      // it with a guess.
+    }
+  }, []);
+
   const role = org?.role ?? null;
 
   const value = useMemo(
-    () => ({ user, org, role, loading, login, register, logout, refreshOrg: loadOrg }),
-    [user, org, role, loading, login, register, logout, loadOrg],
+    () => ({ user, org, role, loading, login, register, logout, refreshOrg: loadOrg, refreshUser }),
+    [user, org, role, loading, login, register, logout, loadOrg, refreshUser],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -76,6 +76,11 @@ def _forbid_live_provider(monkeypatch):
         raise httpx.ConnectError(f"tests must not contact the network: {url}")
 
     monkeypatch.setattr(xposedornot.httpx, "get", _forbidden)
+    # The Pwned Passwords client is network-backed too (register/login now run
+    # k-anonymity checks server-side); the whole suite stays hermetic.
+    from app.signals import hibp as hibp_module
+
+    monkeypatch.setattr(hibp_module.httpx, "get", _forbidden)
     reset_provider_state()
     yield
     reset_provider_state()

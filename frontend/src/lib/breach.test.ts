@@ -181,6 +181,26 @@ describe("summarizeBreachLookup", () => {
     );
     expect(unknown.providerLabel).toBe("some-other-api");
   });
+
+  it("surfaces the placeholder-address honesty note and carries it into markup", () => {
+    // The backend stamps every event for a placeholder-style address ("no
+    // real email") with an explicit not-meaningful warning; the UI must show
+    // it — a provider match on such an address proves nothing.
+    const warning =
+      "This address uses a placeholder-style domain, so the lookup is not meaningful: " +
+      "the mailbox was never a real monitored account.";
+    const events = eventsWithStatus("FINDING", { address_warning: warning });
+    const s = summarizeBreachLookup(events);
+    expect(s.addressWarning).toContain("placeholder-style");
+
+    const html = render(events);
+    expect(html).toContain("placeholder-style");
+  });
+
+  it("leaves the warning out when metadata has none", () => {
+    expect(summarizeBreachLookup(eventsWithStatus("FINDING")).addressWarning).toBeNull();
+    expect(summarizeBreachLookup([]).addressWarning).toBeNull();
+  });
 });
 
 describe("levelFor", () => {

@@ -78,3 +78,29 @@ def classify_session_capability(breach: dict) -> bool:
     classes = {c.lower() for c in breach.get("DataClasses", [])}
     session_markers = {"auth tokens", "session", "sessions", "security questions"}
     return bool(classes & session_markers)
+
+
+def pwned_password_count(password: str, *, timeout: float = 10.0) -> int:
+    """How many times a password appears in the Pwned Passwords corpus.
+
+    Feature B, server side: the plaintext exists in CRIX memory only at the
+    moment the user submitted it (registration / login). We hash it to SHA-1
+    transiently, send ONLY the 5-character prefix to HIBP (k-anonymity; the
+    full hash and the plaintext never leave CRIX), and compare suffixes here.
+
+    Raises ``HIBPUnavailable`` so callers can follow the policy fallback: the
+    result is recorded as UNAVAILABLE, never as "safe".
+    """
+    import hashlib
+
+    digest = hashlib.sha1(password.encode("utf-8")).hexdigest().upper()
+    text = HIBPClient("", timeout=timeout).pwned_password_range(digest[:5])
+    suffix = digest[5:]
+    for line in text.splitlines():
+        candidate, _, count = line.partition(":")
+        if candidate.strip().upper() == suffix:
+            try:
+                return int(count or 0)
+            except ValueError:
+                return 0
+    return 0

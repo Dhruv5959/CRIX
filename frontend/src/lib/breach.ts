@@ -27,6 +27,9 @@ export interface BreachLookupSummary {
   breachCount: number;
   truncated: boolean;
   reason: string;
+  /** Honesty note for placeholder-style addresses ("no real email"): the
+   * verdict on such an address is not meaningful evidence about a mailbox. */
+  addressWarning: string | null;
   severity: number;
   confidence: number;
   level: BreachLevel;
@@ -80,6 +83,7 @@ export function summarizeBreachLookup(events: SecurityEvent[]): BreachLookupSumm
       breachCount: 0,
       truncated: false,
       reason: "",
+      addressWarning: null,
       severity: 0,
       confidence: 0,
       level: "NONE",
@@ -117,6 +121,7 @@ export function summarizeBreachLookup(events: SecurityEvent[]): BreachLookupSumm
     breachCount: asNumber("breach_count", breaches.length),
     truncated: meta.breaches_truncated === true,
     reason: asString("reason") ?? "",
+    addressWarning: asString("address_warning"),
     severity,
     confidence: typeof primary.confidence === "number" ? primary.confidence : 0,
     level: levelFor(status, severity),

@@ -66,6 +66,12 @@ export function BreachResult({ summary }: { summary: BreachLookupSummary }) {
         </p>
       )}
 
+      {summary.addressWarning && (
+        <p className="rounded border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-[11px] leading-relaxed text-sky-200">
+          {summary.addressWarning}
+        </p>
+      )}
+
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-ink-faint">
         <span>
           Provider: <span className="text-ink-muted">{summary.providerLabel}</span>

@@ -25,7 +25,31 @@ export interface User {
   is_active: boolean;
   email_verified: boolean;
   totp_enabled: boolean;
+  // Feature A / B outcome metadata (never password or hash material).
+  breach_monitor_consent: boolean;
+  last_breach_check_at: string | null;
+  last_password_exposure: PasswordExposureOutcome | null;
   created_at: string;
+}
+
+/** Login-time Pwned Passwords outcome (§3.B). Honest vocabulary: an offline
+ * provider is UNAVAILABLE, never "safe". No password material ever appears. */
+export interface PasswordExposureOutcome {
+  provider: string;
+  status: "PWNED" | "NOT_IN_CORPUS" | "UNAVAILABLE";
+  count: number | null;
+  checked_at: string;
+}
+
+/** Feature A monitor state for the registered work email (`/api/signals/
+ * breach/monitor/*`). State only — never a verdict on the password. */
+export interface BreachMonitorStatus {
+  enabled: boolean;
+  registered_email: string;
+  /** Placeholder-style domain: any provider verdict is not meaningful evidence. */
+  placeholder_domain: boolean;
+  last_breach_check_at: string | null;
+  refresh_after_hours: number;
 }
 
 export interface TokenResponse {

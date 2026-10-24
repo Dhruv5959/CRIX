@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 
 export default function LoginPage() {
   const { user, login, register } = useAuth();
@@ -13,6 +14,9 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [totp, setTotp] = useState("");
+  // Feature A: optional affirmative opt-in at registration. Never on by
+  // default — the server stores the choice with a timestamp.
+  const [consent, setConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -29,7 +33,7 @@ export default function LoginPage() {
         await login(email, password, totp || undefined);
         navigate("/");
       } else if (mode === "register") {
-        await register(email, password);
+        await register(email, password, consent);
         navigate("/");
       } else {
         // Password reset. The backend has no SMTP in dev, so it writes the
@@ -119,6 +123,17 @@ export default function LoginPage() {
                 <p className="mt-1 text-[11px] text-ink-faint">At least 10 characters. Hashed with bcrypt (cost 12).</p>
               )}
             </div>
+          )}
+          {mode === "register" && (
+            <Switch
+              checked={consent}
+              onChange={setConsent}
+              label="Enable automatic breach monitoring"
+              description={
+                "At sign-in, re-check this address in breach data — only when the last " +
+                "check is older than 24h. Consent is recorded with a timestamp; revoke anytime."
+              }
+            />
           )}
           {mode === "login" && (
             <div>
