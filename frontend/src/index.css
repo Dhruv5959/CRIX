@@ -68,6 +68,19 @@ body::before {
   color: theme("colors.ink.DEFAULT");
 }
 
+/* Native <select> popup lists are OS-rendered: with the app's dark
+   color-scheme Chromium paints them near-black with washed-out text.
+   Every dropdown in the app goes through components/ui/input.tsx Select
+   (which carries [color-scheme:light]); this rule backstops browsers that
+   honor per-option paint (Chromium/Edge on Windows, Firefox) so the open
+   list is always white with black text. The closed glass control is
+   unaffected — author styles keep it dark. */
+select option,
+select optgroup {
+  background-color: #ffffff;
+  color: #0a0a0a;
+}
+
 /* Slim scrollbars that keep the translucent feel. */
 ::-webkit-scrollbar {
   width: 10px;

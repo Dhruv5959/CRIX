@@ -24,7 +24,14 @@ Textarea.displayName = "Textarea";
 
 export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(
   ({ className, children, ...props }, ref) => (
-    <select ref={ref} className={cn("h-10 cursor-pointer px-3", field, className)} {...props}>
+    // [color-scheme:light] applies to the OS-rendered option POPUP (Windows/
+    // Chromium paints it dark when the page is dark), while author classes
+    // keep the closed control's glass look. White list, black text.
+    <select
+      ref={ref}
+      className={cn("h-10 cursor-pointer px-3 [color-scheme:light]", field, className)}
+      {...props}
+    >
       {children}
     </select>
   ),
