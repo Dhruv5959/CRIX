@@ -21,7 +21,14 @@ from app.config import Settings, get_settings
 from app.data.loader import seed_all
 from app.db import Base, get_db
 from app.main import app
-from app.rate_limit import breach_check_limiter, login_limiter, password_check_limiter
+from app.rate_limit import (
+    breach_check_limiter,
+    invite_accept_limiter,
+    login_limiter,
+    password_check_limiter,
+    password_reset_limiter,
+    register_limiter,
+)
 from app.signals import xposedornot
 from app.signals.xposedornot import reset_provider_state
 
@@ -43,6 +50,11 @@ TEST_SETTINGS = Settings(
     login_rate_limit_per_minute=5,
     password_check_rate_limit_per_minute=30,
     breach_check_rate_limit_per_minute=10,
+    register_rate_limit_per_minute=20,
+    password_reset_rate_limit_per_minute=10,
+    invite_accept_rate_limit_per_minute=20,
+    public_base_url="http://localhost:5173",
+    trust_proxy_headers=False,
     # The connector-layer tests exercise the OAuth code paths, so they enable the
     # (otherwise OFF) freeze flag here. The freeze itself is asserted separately
     # against the real defaults in tests/test_oauth_freeze.py.
@@ -108,9 +120,15 @@ def client(db_session):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_settings] = override_get_settings
-    login_limiter.reset()
-    password_check_limiter.reset()
-    breach_check_limiter.reset()
+    for limiter in (
+        login_limiter,
+        password_check_limiter,
+        breach_check_limiter,
+        register_limiter,
+        password_reset_limiter,
+        invite_accept_limiter,
+    ):
+        limiter.reset()
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

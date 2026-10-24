@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Mail, Plus, Users as UsersIcon } from "lucide-react";
+import { Mail, Users as UsersIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { MemberInfo, Invitation } from "@/lib/types";

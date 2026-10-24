@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app import audit, security
 from app.config import Settings, get_settings
 from app.db import get_db
-from app.deps import get_current_membership, require_role
+from app.deps import get_current_membership, get_current_user_or_none, require_role
 from app.models import (
     AdminViewAuditLog,
     Invitation,
@@ -34,7 +34,7 @@ from app.models import (
     OrgAsset,
     User,
 )
-from app.rate_limit import client_ip
+from app.rate_limit import client_ip, enforce, invite_accept_limiter
 from app.schemas import (
     AdminViewResponse,
     InvitationAcceptRequest,
@@ -348,7 +348,7 @@ def create_invitation(
     db.commit()
     db.refresh(invite)
 
-    link = f"http://localhost:5173/invite?token={raw}"
+    link = f"{settings.public_base_url}/invite?token={raw}"
     send_email(
         to=email,
         subject=f"You have been invited to join {db.get(Organization, membership.org_id).name} on CRIX",
@@ -413,13 +413,27 @@ def revoke_invitation(
 def accept_invitation(
     payload: InvitationAcceptRequest,
     request: Request,
+    caller: Annotated[User | None, Depends(get_current_user_or_none)],
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict:
     """Accept an invitation, creating the account if the email is new.
 
     The token is single-use and expiring; only its hash is stored.
+
+    Proof-of-control rules (pre-registration takeover defense):
+
+    * Creating a NEW account through the link is fine — the token was emailed
+      to that address, so possession demonstrates control of the inbox.
+    * An account that ALREADY exists (e.g. pre-registered by someone else) can
+      NOT be bound to the invitation by token possession alone: the binding
+      requires an authenticated session for that exact account. Otherwise an
+      attacker who pre-registered a colleague's address could silently capture
+      the membership when the real recipient accepted.
     """
+    enforce(
+        invite_accept_limiter, request, limit=settings.invite_accept_rate_limit_per_minute
+    )
     invite = db.scalar(select(Invitation).where(Invitation.token_hash == _hash_token(payload.token)))
     now = dt.datetime.now(dt.timezone.utc)
     if invite is None or invite.used_at is not None or _as_utc(invite.expires_at) <= now:
@@ -429,7 +443,21 @@ def accept_invitation(
         )
 
     user = db.scalar(select(User).where(User.email == invite.email))
+    if user is not None and (caller is None or caller.id != user.id or not caller.is_active):
+        # Token possession is NOT proof that the requester controls an
+        # already-registered account (an account could have been pre-registered
+        # by someone else with a different password). Only the authenticated
+        # owner of that account may bind its membership.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "An account already exists for this email. Log in with that "
+                "account first, then accept the invitation from your session."
+            ),
+        )
+
     if user is None:
+        # New account: the emailed token is the proof of inbox control.
         if not payload.password:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

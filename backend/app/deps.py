@@ -60,6 +60,28 @@ def get_current_user(
     return user
 
 
+def get_current_user_or_none(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> User | None:
+    """Same as ``get_current_user`` but returns ``None`` instead of raising.
+
+    Used by endpoints that behave differently for anonymous vs. authenticated
+    callers (e.g. invitation acceptance) without leaking *why* auth failed.
+    """
+    if credentials is None or not credentials.credentials:
+        return None
+    try:
+        payload = decode_access_token(credentials.credentials, settings)
+    except (ExpiredSignatureError, InvalidTokenError):
+        return None
+    user = db.get(User, payload["sub"])
+    if user is None or not user.is_active:
+        return None
+    return user
+
+
 def get_current_membership(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),

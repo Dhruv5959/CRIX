@@ -446,4 +446,65 @@ SYNTHETIC/FIXTURE/USER_PROVIDED evidence by construction (REAL sources only).
 
 ---
 
+## Security-hardening pass (2026-10-24, post phase-7 + SMB frontend)
+
+Findings from a full review of `750f9f2..HEAD` were fixed in code. Tests were
+only ever strengthened (5 new regression tests); nothing was weakened.
+
+### Fixed
+
+* **Invite pre-registration takeover (HIGH)** — `POST /api/invitations/accept`
+  previously bound an invitation to *any* pre-existing account with that email
+  by token possession alone. An attacker who pre-registered a colleague's
+  address could silently capture the invited membership. Now binding an
+  already-existing account requires an authenticated session for that exact
+  account (`backend/app/routers/org.py`, `backend/app/deps.py`). New-account
+  creation via the emailed token is unchanged (possession = inbox control).
+* **Rate limits** on the previously unthrottled anonymous endpoints:
+  `/register` (bcrypt-CPU), `/password-reset/request` (email sending +
+  enumeration timing), `/invitations/accept` (token brute force).
+  (`backend/app/routers/auth.py`, `org.py`, `rate_limit.py`.)
+* **`cryptography` added to `backend/requirements.txt`** (was missing → clean
+  installs failed at import). All Python deps pinned to the exact versions
+  verified in the project venv.
+* **SMTP support for production email** (`backend/app/services/email.py`) with
+  a fail-fast startup check (`config.assert_production_safe`) that also refuses
+  localhost `CRIX_PUBLIC_BASE_URL` in production — reset/invite links are now
+  built from `CRIX_PUBLIC_BASE_URL` instead of hardcoded `http://localhost:5173`.
+* **Security headers** (nosniff, X-Frame-Options DENY, Referrer-Policy,
+  Permissions-Policy; CSP + HSTS in production) and OpenAPI/docs disabled in
+  production (`backend/app/main.py`).
+* **`CRIX_TRUST_PROXY_HEADERS`** (default False): `X-Forwarded-For` is honored
+  only behind a declared trusted proxy, so limits/audit IPs cannot be spoofed.
+* **Password-reset tokens**: a new request invalidates earlier unused tokens.
+* **2FA enrollment** (`POST /api/auth/2fa/setup`) now requires password
+  re-authentication, so a stolen session cannot enroll an attacker
+  authenticator (`backend/app/routers/auth.py`).
+* **docker-compose**: Postgres binds to loopback only, password overridable
+  via `CRIX_PG_PASSWORD`.
+* **Frontend (functional bugs from the SMB commit)**: `acceptInvitation`
+  pointed at a non-existent `/api/auth/accept-invitation` (now
+  `/api/invitations/accept`); a `/invite` acceptance page was missing entirely
+  (added, reusing existing design patterns); `remediationPlan` sent its
+  `budget` in the body while the backend reads a query parameter — the
+  override was silently ignored.
+* **Pre-existing `tsc` breakage** from the SMB frontend commit fixed by using
+  lucide-react's `LucideIcon` type and removing unused imports — `npm run
+  build` works again.
+
+### Honest deployment note (not changed)
+
+The in-process rate limiter and OAuth pending-state table are per-process;
+single-worker uvicorn is the supported deployment (startup now prints this).
+`psycopg` remains unpinned and the PostgreSQL suite remains never-run here.
+
+### Verification
+
+* Backend: **440 tests passed** (435 before + 5 new hardening regression
+  tests, incl. the takeover attack, 3 rate limits, token invalidation).
+* Frontend: `tsc --noEmit` **0 errors** (was broken by the SMB commit),
+  `vitest` **31/31**, `npm run build` **exit 0**.
+* No OAuth/config change, no tenant-scope change, no plaintext secrets; `.env`
+  stays untracked.
+
 *(Phase 8+ entries appended when those phases complete.)*

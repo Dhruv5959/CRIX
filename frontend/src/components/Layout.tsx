@@ -18,6 +18,7 @@ import {
   Users,
   X,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -28,7 +29,7 @@ import type { Health } from "@/lib/types";
 interface NavItem {
   to: string;
   label: string;
-  icon: React.ComponentType<{ size?: number }>;
+  icon: LucideIcon;
   end?: boolean;
   /** Only show for these roles. Omit = visible to all. */
   roles?: string[];

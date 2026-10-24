@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { CheckCircle, Circle, Clock, RefreshCw, RotateCcw, ShieldCheck, XCircle } from "lucide-react";
+import { CheckCircle, Circle, Clock, RotateCcw, ShieldCheck } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { RemediationTask, RemediationTaskDetail, TaskStatus } from "@/lib/types";
@@ -8,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { ProvenanceBadge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
-const STATUS_CONFIG: Record<TaskStatus, { label: string; color: string; icon: React.ComponentType<{ size?: number; className?: string }> }> = {
+const STATUS_CONFIG: Record<TaskStatus, { label: string; color: string; icon: LucideIcon }> = {
   OPEN: { label: "Open", color: "text-amber-300 border-amber-500/40", icon: Circle },
   DONE: { label: "Done", color: "text-blue-300 border-blue-500/40", icon: Clock },
   VERIFIED_MODELED: { label: "Verified (Modeled)", color: "text-emerald-300 border-emerald-500/40", icon: CheckCircle },

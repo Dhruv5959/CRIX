@@ -15,6 +15,7 @@ import hashlib
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -23,7 +24,13 @@ from app.config import Settings, get_settings
 from app.db import get_db
 from app.deps import get_current_user
 from app.models import Membership, PasswordResetToken, RefreshToken, User
-from app.rate_limit import client_ip, enforce, login_limiter
+from app.rate_limit import (
+    client_ip,
+    enforce,
+    login_limiter,
+    password_reset_limiter,
+    register_limiter,
+)
 from app.routers.org import create_organization
 from app.schemas import (
     LoginRequest,
@@ -105,6 +112,10 @@ def register(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> User:
+    # Registration runs bcrypt (cost >= 12) and creates an organization: it is
+    # the cheapest way for an anonymous caller to burn server CPU, so it is
+    # rate limited like login.
+    enforce(register_limiter, request, limit=settings.register_rate_limit_per_minute)
     email = payload.email.lower()
     existing = db.scalar(select(User).where(User.email == email))
     if existing is not None:
@@ -286,20 +297,39 @@ def password_reset_request(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
     # Always return the same response to prevent account enumeration.
+    # Rate limited per IP: each call performs a DB lookup and (when the account
+    # exists) sends an email, so unthrottled calls enable mail bombing and
+    # make the timing of "user exists" observable through load.
+    enforce(
+        password_reset_limiter,
+        request,
+        limit=settings.password_reset_rate_limit_per_minute,
+    )
     user = db.scalar(select(User).where(User.email == payload.email.lower()))
     transport = "none"
     if user is not None:
         raw = security.new_opaque_token()
+        now = dt.datetime.now(dt.timezone.utc)
+        # A single outstanding token per user: a NEW request invalidates any
+        # token that was still unused, so a pile of valid links never
+        # accumulates after repeated requests (or after an attacker spams the
+        # endpoint).
+        for stale in db.scalars(
+            select(PasswordResetToken).where(
+                PasswordResetToken.user_id == user.id,
+                PasswordResetToken.used_at.is_(None),
+            )
+        ):
+            stale.used_at = now
         db.add(
             PasswordResetToken(
                 user_id=user.id,
                 token_hash=_hash_token(raw),
-                expires_at=dt.datetime.now(dt.timezone.utc)
-                + dt.timedelta(minutes=RESET_TOKEN_TTL_MINUTES),
+                expires_at=now + dt.timedelta(minutes=RESET_TOKEN_TTL_MINUTES),
             )
         )
         db.commit()
-        link = f"http://localhost:5173/reset-password?token={raw}"
+        link = f"{settings.public_base_url}/reset-password?token={raw}"
         transport = send_email(
             to=user.email,
             subject="Reset your CRIX password",
@@ -344,11 +374,28 @@ def password_reset_confirm(
 # --------------------------------------------------------------------------- #
 # Optional TOTP 2FA (nice-to-have, §2)
 # --------------------------------------------------------------------------- #
+class TwoFactorSetupRequest(BaseModel):
+    """Re-authentication proof for enrolling a (new) TOTP secret.
+
+    An attacker who has stolen a session must not be able to enroll their own
+    authenticator and thereby take the account over with no second factor of
+    the victim's. Requiring the account password closes that path.
+    """
+
+    password: str
+
+
 @router.post("/2fa/setup")
 def setup_2fa(
+    payload: TwoFactorSetupRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
+    if not security.verify_password(payload.password, current_user.password_hash, get_settings()):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password confirmation failed. Two-factor enrollment requires your password.",
+        )
     secret = totp.generate_secret()
     current_user.totp_secret = secret
     db.commit()

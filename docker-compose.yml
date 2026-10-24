@@ -18,10 +18,13 @@ services:
     container_name: crix-postgres
     environment:
       POSTGRES_USER: crix
-      POSTGRES_PASSWORD: crix
+      # Override with CRIX_PG_PASSWORD in the environment; the default matches
+      # the documented local connection string.
+      POSTGRES_PASSWORD: ${CRIX_PG_PASSWORD:-crix}
       POSTGRES_DB: crix
     ports:
-      - "5432:5432"
+      # Loopback only: the dev database must not be reachable from the LAN.
+      - "127.0.0.1:5432:5432"
     volumes:
       - crix_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -37,10 +40,11 @@ services:
     profiles: ["test"]
     environment:
       POSTGRES_USER: crix
-      POSTGRES_PASSWORD: crix
+      POSTGRES_PASSWORD: ${CRIX_PG_PASSWORD:-crix}
       POSTGRES_DB: crix_test
     ports:
-      - "5433:5432"
+      # Loopback only: the test database must not be reachable from the LAN.
+      - "127.0.0.1:5433:5432"
     volumes:
       - crix_pgdata_test:/var/lib/postgresql/data
 

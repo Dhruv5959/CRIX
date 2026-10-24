@@ -1,26 +1,34 @@
 # CRIX backend runtime + dev dependencies.
-# Pinned to minimums known to work on Python 3.13.
-fastapi>=0.115
-uvicorn[standard]>=0.30
-sqlalchemy>=2.0.30
-alembic>=1.13
-pydantic>=2.7
-pydantic-settings>=2.3
-email-validator>=2.1
-PyJWT>=2.8
-bcrypt>=4.1
-python-multipart>=0.0.9
-httpx>=0.27
-networkx>=3.3
-numpy>=1.26
-scikit-learn>=1.5
-PyYAML>=6.0
+# Pinned to exact versions verified together on Python 3.13 in this project's
+# venv, so a clean install reproduces the tested environment exactly
+# (unpinned ">= everywhere" previously made installs non-reproducible).
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
+sqlalchemy==2.1.4
+alembic==1.20.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+email-validator==2.3.0
+PyJWT==2.15.1
+bcrypt==5.0.0
+python-multipart==0.0.32
+httpx==0.28.1
+networkx==3.7
+numpy==2.5.3
+scikit-learn==1.9.1
+PyYAML==6.0.3
+
+# Fernet encryption-at-rest for stored OAuth tokens (app/token_crypto.py).
+# Previously MISSING here: a clean `pip install -r requirements.txt` failed at
+# startup with ImportError even though the venv happened to have it.
+cryptography==50.0.2
 
 # PostgreSQL driver. SQLite stays the default for local dev and tests; setting
 # CRIX_DATABASE_URL to a postgresql:// URL (see docker-compose.yml) enables the
-# full-stack path. Not required to run the app.
+# full-stack path. Not required to run the app. Left unpinned: NOT installed in
+# this project's venv (never verified here), so no tested version exists to pin.
 psycopg[binary]>=3.2
 
 # Dev / test
-pytest>=8.2
-pytest-asyncio>=0.23
+pytest==9.1.1
+pytest-asyncio==1.4.0

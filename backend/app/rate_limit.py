@@ -54,10 +54,28 @@ password_check_limiter = RateLimiter()
 # Inbound cap for the breach-check endpoint: the external provider's free tier is
 # small (25 lookups/hour/IP), so one client must not be able to burn it.
 breach_check_limiter = RateLimiter()
+# Unauthenticated, expensive / email-sending endpoints (see config defaults).
+register_limiter = RateLimiter()
+password_reset_limiter = RateLimiter()
+invite_accept_limiter = RateLimiter()
 
 
 def client_ip(request: Request) -> str:
-    # Trust X-Forwarded-For only if behind a known proxy; default to peer IP.
+    """Best-effort client identity key for rate limiting and audit records.
+
+    ``X-Forwarded-For`` is honored ONLY when the operator has declared the app
+    sits behind a trusted proxy (``CRIX_TRUST_PROXY_HEADERS``). Trusting it by
+    default would let any client rotate fake IPs and defeat the per-IP limits.
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    if settings.trust_proxy_headers:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            first = forwarded.split(",")[0].strip()
+            if first:
+                return first
     if request.client and request.client.host:
         return request.client.host
     return "unknown"

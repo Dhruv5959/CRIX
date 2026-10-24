@@ -287,10 +287,16 @@ export const api = {
     }),
   listInvitations: () => request<Invitation[]>("/api/invitations"),
   acceptInvitation: (token: string, password?: string) =>
-    request<{ detail: string }>("/api/auth/accept-invitation", {
-      method: "POST",
-      body: JSON.stringify({ token, password: password || undefined }),
-    }),
+    request<{ detail: string; email: string; role: string; org_id: string }>(
+      "/api/invitations/accept",
+      {
+        method: "POST",
+        body: JSON.stringify({ token, password: password || undefined }),
+        // No `auth: false` here: when the invited email already has an
+        // account, the backend requires a session for THAT account, so a
+        // held access token must be attached automatically.
+      },
+    ),
 
   // --- org assets ---
   listAssets: () => request<OrgAsset[]>("/api/assets"),
@@ -361,10 +367,14 @@ export const api = {
       body: JSON.stringify({ reason }),
     }),
   remediationPlan: (budget?: number) =>
-    request<RemediationPlanResult>("/api/remediation/plan", {
-      method: "POST",
-      body: JSON.stringify(budget !== undefined ? { budget } : {}),
-    }),
+    // The backend reads `budget` as a (bound) query parameter — a JSON body
+    // with budget was silently ignored.
+    request<RemediationPlanResult>(
+      budget !== undefined
+        ? `/api/remediation/plan?budget=${encodeURIComponent(String(budget))}`
+        : "/api/remediation/plan",
+      { method: "POST" },
+    ),
 
   // --- risk history ---
   riskHistory: () =>

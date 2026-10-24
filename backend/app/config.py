@@ -77,6 +77,30 @@ class Settings(BaseSettings):
     # Inbound cap on the breach-check endpoint: protects the shared provider
     # quota from one client hammering the API.
     breach_check_rate_limit_per_minute: int = 10
+    # Unauthenticated endpoints that are expensive (bcrypt) or email-sending.
+    register_rate_limit_per_minute: int = 20
+    password_reset_rate_limit_per_minute: int = 10
+    invite_accept_rate_limit_per_minute: int = 20
+
+    # Public base URL the backend builds emailed links from (password reset,
+    # invitations). Never bake a hardcoded localhost link into an email.
+    public_base_url: str = "http://localhost:5173"
+
+    # Only honor X-Forwarded-For when the app is actually deployed behind a
+    # trusted reverse proxy. Otherwise a client could spoof the header to
+    # rotate rate-limit buckets or forge recorded IPs.
+    trust_proxy_headers: bool = False
+
+    # --- SMTP (production email transport) ------------------------------------
+    # Dev writes .eml files to backend/artifacts/outbox/. Production must
+    # configure a real SMTP host or refuse to start (assert_production_safe):
+    # password reset and invitations are dead ends without working email.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    email_from: str = "no-reply@crix.local"
+    smtp_start_tls: bool = True
 
     # --- Risk model (Phase 6b) ------------------------------------------------
     # The DependencyExposure term adds the org dependency graph's documented
@@ -150,6 +174,16 @@ class Settings(BaseSettings):
             if not self.token_encryption_key:
                 raise RuntimeError(
                     "CRIX_TOKEN_ENCRYPTION_KEY must be set in production (Fernet key)."
+                )
+            if not self.smtp_host:
+                raise RuntimeError(
+                    "CRIX_SMTP_HOST must be set in production: password reset and "
+                    "invitations are unusable without it."
+                )
+            if self.public_base_url.startswith("http://localhost"):
+                raise RuntimeError(
+                    "CRIX_PUBLIC_BASE_URL must be a real public URL in production; "
+                    "emailed reset/invite links would be dead."
                 )
             if self.oauth_connectors_enabled and not (
                 self.google_client_id or self.linkedin_client_id

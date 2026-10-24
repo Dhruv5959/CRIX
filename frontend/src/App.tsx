@@ -5,6 +5,7 @@ import { AnalysisProvider } from "@/lib/analysis";
 import Layout from "@/components/Layout";
 import LoginPage from "@/pages/LoginPage";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
+import InviteAcceptPage from "@/pages/InviteAcceptPage";
 import OverviewPage from "@/pages/OverviewPage";
 import SignalsPage from "@/pages/SignalsPage";
 import CorrelationsPage from "@/pages/CorrelationsPage";
@@ -41,6 +42,8 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       {/* Target of the link in the password-reset email. */}
       <Route path="/reset-password" element={<ResetPasswordPage />} />
+      {/* Target of the link in a member invitation email. */}
+      <Route path="/invite" element={<InviteAcceptPage />} />
       <Route
         element={
           <Protected>
