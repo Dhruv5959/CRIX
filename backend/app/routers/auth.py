@@ -62,6 +62,11 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 REFRESH_COOKIE = "crix_refresh"
 REFRESH_COOKIE_PATH = "/api/auth"
+# JS-readable mirror of the session's CSRF token (path "/"). The SPA keeps its
+# copy only in memory, so without this cookie a page reload could not echo the
+# X-CSRF-Token header, the silent refresh got a 403, and every reload signed
+# the user out. The header itself remains mandatory — this only supplies it.
+CSRF_COOKIE = "crix_csrf"
 CSRF_HEADER = "X-CSRF-Token"
 RESET_TOKEN_TTL_MINUTES = 30
 
@@ -94,6 +99,25 @@ def _set_refresh_cookie(response: Response, raw: str, settings: Settings) -> Non
 
 def _clear_refresh_cookie(response: Response) -> None:
     response.delete_cookie(key=REFRESH_COOKIE, path=REFRESH_COOKIE_PATH)
+    response.delete_cookie(key=CSRF_COOKIE, path="/")
+
+
+def _set_csrf_cookie(response: Response, csrf: str, settings: Settings) -> None:
+    """Mirror the session's CSRF token where the SPA can read it back.
+
+    Set on every issue/rotation (register/login/refresh) and cleared on
+    logout, so a reloaded page can always rebuild the X-CSRF-Token header
+    from the cookie while the session it belongs to is still alive.
+    """
+    response.set_cookie(
+        key=CSRF_COOKIE,
+        value=csrf,
+        max_age=settings.refresh_token_expire_days * 24 * 3600,
+        httponly=False,  # the client must read it to rebuild the header after a reload
+        secure=settings.is_production,
+        samesite="lax",
+        path="/",
+    )
 
 
 def _issue_session(
@@ -102,6 +126,7 @@ def _issue_session(
     access, expires_at = security.create_access_token(user_id=user.id, settings=settings)
     raw_refresh = security.new_refresh_token()
     csrf = security.new_csrf_token()
+    _set_csrf_cookie(response, csrf, settings)
     db.add(
         RefreshToken(
             user_id=user.id,
@@ -337,6 +362,9 @@ def refresh(
 
     access, expires_at = security.create_access_token(user_id=user.id, settings=settings)
     _set_refresh_cookie(response, raw_refresh, settings)
+    # Rotation mints a NEW csrf token — the readable mirror must follow it,
+    # otherwise a reload after a refresh would echo the stale value and 403.
+    _set_csrf_cookie(response, csrf, settings)
     return TokenResponse(access_token=access, expires_at=expires_at, csrf_token=csrf)
 
 

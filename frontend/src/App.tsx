@@ -2,6 +2,7 @@ import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { AnalysisProvider } from "@/lib/analysis";
+import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 import Layout from "@/components/Layout";
 import LoginPage from "@/pages/LoginPage";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
@@ -39,7 +40,10 @@ function Protected({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <Routes>
+    // Any render error inside a page or the shell lands here instead of
+    // unmounting the whole SPA into a blank page.
+    <AppErrorBoundary>
+      <Routes>
       <Route path="/login" element={<LoginPage />} />
       {/* Target of the link in the password-reset email. */}
       <Route path="/reset-password" element={<ResetPasswordPage />} />
@@ -114,7 +118,8 @@ export default function App() {
         />
         <Route path="/audit" element={<AuditPage />} />
       </Route>
-    </Routes>
+      </Routes>
+    </AppErrorBoundary>
   );
 }
 

@@ -52,10 +52,24 @@ import type {
 
 let accessToken: string | null = null;
 let csrfToken: string | null = null;
+/** In-flight refresh shared by every caller until it settles (see refresh). */
+let refreshInFlight: Promise<TokenResponse> | null = null;
 
 export function setTokens(access: string | null, csrf: string | null) {
   accessToken = access;
   csrfToken = csrf;
+}
+
+/**
+ * Reload fallback for the double-submit CSRF token. The in-memory copy dies
+ * with the page, but the server also mirrors it in a JS-readable `crix_csrf`
+ * cookie — without it, the silent refresh on load could not echo the header,
+ * got a 403, and signed the user out on every reload.
+ */
+function csrfFromCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  const match = /(?:^|;\s*)crix_csrf=([^;]+)/.exec(document.cookie);
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
 export class ApiError extends Error {
@@ -78,7 +92,7 @@ function responseErrorMessage(status: number): string {
 
 async function request<T>(
   path: string,
-  options: RequestInit & { auth?: boolean; csrf?: boolean } = {},
+  options: RequestInit & { auth?: boolean; csrf?: boolean; retried?: boolean } = {},
 ): Promise<T> {
   const headers = new Headers(options.headers || {});
   if (!headers.has("Content-Type") && options.body && !(options.body instanceof FormData)) {
@@ -87,14 +101,27 @@ async function request<T>(
   if (options.auth !== false && accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
-  if (options.csrf && csrfToken) {
-    headers.set("X-CSRF-Token", csrfToken);
+  const csrf = csrfToken ?? csrfFromCookie();
+  if (options.csrf && csrf) {
+    headers.set("X-CSRF-Token", csrf);
   }
   const response = await fetch(path, {
     ...options,
     headers,
     credentials: "include",
   });
+  // An authenticated 401 usually means the short-lived access token expired:
+  // rotate the refresh token once (single-flight) and replay the request.
+  // auth:false calls — including login and refresh itself — never retry, so a
+  // real credential failure still surfaces exactly as before.
+  if (response.status === 401 && options.auth !== false && !options.retried) {
+    try {
+      await api.refresh();
+      return await request<T>(path, { ...options, retried: true });
+    } catch {
+      // Refresh failed — fall through and surface the original 401 below.
+    }
+  }
   if (response.status === 204) return undefined as T;
   const text = await response.text();
   let data: unknown;
@@ -139,14 +166,25 @@ export const api = {
     setTokens(data.access_token, data.csrf_token);
     return data;
   },
-  refresh: async () => {
-    const data = await request<TokenResponse>("/api/auth/refresh", {
-      method: "POST",
-      auth: false,
-      csrf: true,
-    });
-    setTokens(data.access_token, data.csrf_token);
-    return data;
+  refresh: () => {
+    // Single-flight: concurrent 401s (or two tabs racing after a session
+    // restore) must produce ONE rotation — presenting the same refresh token
+    // twice trips reuse detection and revokes the entire session.
+    if (!refreshInFlight) {
+      refreshInFlight = request<TokenResponse>("/api/auth/refresh", {
+        method: "POST",
+        auth: false,
+        csrf: true,
+      })
+        .then((data) => {
+          setTokens(data.access_token, data.csrf_token);
+          return data;
+        })
+        .finally(() => {
+          refreshInFlight = null;
+        });
+    }
+    return refreshInFlight;
   },
   logout: async () => {
     try {
@@ -438,7 +476,12 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ effort_budget }),
     }),
-  listTasks: () => request<RemediationTask[]>("/api/remediation/tasks"),
+  listTasks: () =>
+    // The backend wraps rows as {tasks, count} — unwrap so the board gets a
+    // real array (a bare object made .filter throw and blanked the SPA).
+    request<{ tasks: RemediationTask[]; count: number }>("/api/remediation/tasks").then(
+      (data) => data.tasks,
+    ),
   createTask: (payload: {
     action_key: string;
     target_asset_id?: string;

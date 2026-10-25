@@ -60,6 +60,31 @@ def test_logout_clears_session(client):
     assert client.post("/api/auth/refresh").status_code == 401
 
 
+def test_login_mirrors_csrf_token_into_a_js_readable_cookie(client):
+    """The SPA keeps its CSRF copy only in memory, so the server mirrors it in
+    a JS-readable cookie: after a reload the client must still be able to echo
+    X-CSRF-Token, otherwise the silent refresh 403s and every page reload signs
+    the user out. The header itself stays mandatory (next test)."""
+    data = register_and_login(client, email="csrf-cookie@example.com")
+    assert client.cookies.get("crix_csrf") == data["csrf_token"]
+
+
+def test_refresh_rotates_the_csrf_cookie(client):
+    data = register_and_login(client, email="csrf-cookie-rotate@example.com")
+    refreshed = client.post("/api/auth/refresh", headers={"X-CSRF-Token": data["csrf_token"]})
+    assert refreshed.status_code == 200
+    new_csrf = refreshed.json()["csrf_token"]
+    assert new_csrf != data["csrf_token"]
+    assert client.cookies.get("crix_csrf") == new_csrf
+
+
+def test_logout_removes_the_csrf_cookie(client):
+    data = register_and_login(client, email="csrf-cookie-logout@example.com")
+    assert client.cookies.get("crix_csrf")
+    client.post("/api/auth/logout", headers={"X-CSRF-Token": data["csrf_token"]})
+    assert client.cookies.get("crix_csrf") is None
+
+
 def test_idor_user_cannot_read_other_account(client):
     # User A creates an account.
     a = register_and_login(client, email="a@example.com")

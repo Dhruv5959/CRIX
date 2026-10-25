@@ -27,6 +27,7 @@ from app.routers import (
     relationships,
     remediation,
     repo_scan,
+    risk_history,
 )
 
 settings = get_settings()
@@ -102,6 +103,7 @@ for router in (
     relationships.router,
     propagation.router,
     remediation.router,
+    risk_history.router,
 ):
     app.include_router(router)
 

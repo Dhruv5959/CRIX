@@ -809,14 +809,60 @@ def test_risk_snapshots_endpoint_exposure_is_none_yet_and_org_owned(client, db_s
         select(RiskResult).where(RiskResult.org_id == membership.org_id)
     ).all()
     assert rows, "the snapshot must be queryable inside its organization"
-    # No route in the app returns raw risk_results rows (checked explicitly).
+    # Snapshots leave the server only through the sanctioned, org-scoped
+    # history projection — raw risk_results internals (components, run/user
+    # ids, the full score breakdown) must not be reachable by any route.
+    # (app.routes wraps included routers in objects without a .path, so the
+    # OpenAPI view is the honest enumeration of what is actually exposed.)
     from app.main import app as main_app
 
-    exposed = [
-        route.path for route in main_app.routes
-        if "risk" in getattr(route, "path", "").lower()
-    ]
-    assert exposed == [], f"unexpected raw snapshot route(s): {exposed}"
+    exposed = [path for path in main_app.openapi()["paths"] if "risk" in path.lower()]
+    assert exposed == ["/api/risk-history"], f"unexpected risk route(s): {exposed}"
+
+
+def test_risk_history_serves_a_sanitized_org_scoped_projection(client, analysis_setup):
+    headers, _org_id, _user_id = analysis_setup
+
+    # Empty before any run: the page renders its explicit empty state, and a
+    # 404 here (the old defect) is never acceptable.
+    empty = client.get("/api/risk-history", headers=headers)
+    assert empty.status_code == 200
+    assert empty.json() == {"count": 0, "entries": []}
+
+    assert client.post("/api/analysis/run", json={}, headers=headers).status_code == 200
+    assert client.post("/api/analysis/run", json={}, headers=headers).status_code == 200
+
+    listing = client.get("/api/risk-history", headers=headers)
+    assert listing.status_code == 200
+    body = listing.json()
+    assert body["count"] >= 2, "each run inserts one snapshot"
+    entry = body["entries"][0]
+    # Exactly the fields the page consumes — nothing else from the row leaks.
+    assert set(entry) == {"id", "score", "band", "model_version", "created_at"}
+    assert 0.0 <= entry["score"] <= 100.0
+    assert entry["model_version"] == DOC_MODEL_VERSION
+    assert entry["created_at"]
+    # Newest first: the timeline chart reads index 0 as "latest".
+    stamps = [row["created_at"] for row in body["entries"]]
+    assert stamps == sorted(stamps, reverse=True)
+
+
+def test_risk_history_never_crosses_tenants_and_requires_auth(client, analysis_setup):
+    headers_a, _org_id, _user_id = analysis_setup
+    assert client.post("/api/analysis/run", json={}, headers=headers_a).status_code == 200
+
+    # A different organization has its own (empty) history — tenant A's
+    # snapshots never appear in tenant B's listing.
+    headers_b = register_org_admin(
+        client, "other-tenant-history@example.com", org_name="Other Tenant History Co"
+    )
+    assert client.get("/api/risk-history", headers=headers_a).json()["count"] >= 1
+    listing_b = client.get("/api/risk-history", headers=headers_b)
+    assert listing_b.status_code == 200
+    assert listing_b.json() == {"count": 0, "entries": []}
+
+    # Anonymous callers get nothing.
+    assert client.get("/api/risk-history").status_code == 401
 
 
 # --------------------------------------------------------------------------- #

@@ -41,7 +41,7 @@ Design lives in `backend/app/security.py`, `routers/auth.py`, `deps.py`, and
 | Refresh cookie | `httpOnly`, `SameSite`, `secure` in production (see `_set_refresh_cookie`). |
 | Rotation | Each refresh revokes the old token and issues a child, linking `replaced_by_id`. |
 | Reuse detection | Presenting an already-revoked token → audit `refresh.reuse_detected` and **revoke all** of the user's tokens. |
-| CSRF | Double-submit: the refresh token row stores a `csrf_token`; state-changing refresh/logout require the matching `X-CSRF-Token` header. |
+| CSRF | Double-submit: the refresh token row stores a `csrf_token`; state-changing refresh/logout require the matching `X-CSRF-Token` header. The token is mirrored in a JS-readable `crix_csrf` cookie (path `/`) because the SPA keeps its copy only in memory — after a reload the client rebuilds the header from that cookie. The header itself remains mandatory. |
 | 2FA | Optional TOTP, verified at login when `totp_enabled`. |
 | Password reset | Single-use, short-expiry token (hash stored); dev outbox locally, configured email API/SMTP in prod. |
 | User enumeration | Login always performs a hash comparison (dummy hash when the user is absent) so timing does not reveal existence, and returns a uniform error. |

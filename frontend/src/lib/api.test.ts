@@ -74,9 +74,7 @@ describe("API response handling", () => {
     reply(null, 204);
 
     await expect(api.deleteAccount("account-id")).resolves.toBeUndefined();
-  });
-
-  it("keeps cookie credentials, access tokens, and CSRF on successful auth requests", async () => {
+  });  it("keeps cookie credentials, access tokens, and CSRF on successful auth requests", async () => {
     const tokens = { access_token: "test-access-token", csrf_token: "test-csrf-token" };
     const fetcher = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(tokens)))
@@ -98,5 +96,130 @@ describe("API response handling", () => {
     expect(refreshPath).toBe("/api/auth/refresh");
     expect(refreshOptions.credentials).toBe("include");
     expect(refreshOptions.headers.get("X-CSRF-Token")).toBe("test-csrf-token");
+  });
+});
+
+// Regression guards for the two session bugs found in production: a page
+// reload lost the in-memory CSRF token (silent refresh 403 → forced logout),
+// and the 15-minute access token expired with nothing to renew it (every page
+// started failing until a reload — which also logged the user out).
+describe("session continuity", () => {
+  const json = { "Content-Type": "application/json" };
+
+  function replyQueue(bodies: Array<{ body: string; status: number }>) {
+    const fetcher = vi.fn().mockImplementation((_url: string, _init: RequestInit) => {
+      const next = bodies.shift();
+      if (!next) return Promise.reject(new Error("unexpected extra request"));
+      return Promise.resolve(
+        new Response(next.body, { status: next.status, headers: json }),
+      );
+    });
+    vi.stubGlobal("fetch", fetcher);
+    return fetcher;
+  }
+
+  it("rebuilds the CSRF header from the cookie after a page reload", async () => {
+    const fetcher = replyQueue([
+      { body: JSON.stringify({ access_token: "t", csrf_token: "c" }), status: 200 },
+    ]);
+    // Post-reload: nothing in memory, only the server's JS-readable cookie.
+    vi.stubGlobal("document", { cookie: "theme=dark; crix_csrf=cookie-csrf-value" });
+
+    await api.refresh();
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [path, init] = fetcher.mock.calls[0];
+    expect(path).toBe("/api/auth/refresh");
+    expect(init.headers.get("X-CSRF-Token")).toBe("cookie-csrf-value");
+  });
+
+  it("prefers the in-memory CSRF token over the cookie", async () => {
+    setTokens(null, "memory-csrf");
+    const fetcher = replyQueue([
+      { body: JSON.stringify({ access_token: "t", csrf_token: "c" }), status: 200 },
+    ]);
+    vi.stubGlobal("document", { cookie: "crix_csrf=cookie-csrf" });
+
+    await api.refresh();
+
+    expect(fetcher.mock.calls[0][1].headers.get("X-CSRF-Token")).toBe("memory-csrf");
+  });
+
+  it("refreshes once and replays when the access token has expired", async () => {
+    setTokens("expired-access", "csrf-1");
+    const fetcher = replyQueue([
+      { body: JSON.stringify({ detail: "Token expired." }), status: 401 },
+      { body: JSON.stringify({ access_token: "fresh-access", csrf_token: "csrf-2" }), status: 200 },
+      { body: JSON.stringify([{ account_id: "acct-1" }]), status: 200 },
+    ]);
+
+    await expect(api.listAccounts()).resolves.toEqual([{ account_id: "acct-1" }]);
+
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(fetcher.mock.calls[0][0]).toBe("/api/accounts");
+    expect(fetcher.mock.calls[1][0]).toBe("/api/auth/refresh");
+    expect(fetcher.mock.calls[2][0]).toBe("/api/accounts");
+    expect(fetcher.mock.calls[0][1].headers.get("Authorization")).toBe("Bearer expired-access");
+    expect(fetcher.mock.calls[2][1].headers.get("Authorization")).toBe("Bearer fresh-access");
+  });
+
+  it("never attempts a refresh for unauthenticated failures (login stays a plain 401)", async () => {
+    const fetcher = replyQueue([
+      { body: JSON.stringify({ detail: "Invalid email or password." }), status: 401 },
+    ]);
+
+    await expect(api.login("employee@example.invalid", "test-crix-password")).rejects.toMatchObject({
+      status: 401,
+      message: "Invalid email or password.",
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the original 401 when the refresh itself fails", async () => {
+    setTokens("stale-access", "csrf");
+    const fetcher = replyQueue([
+      { body: JSON.stringify({ detail: "Access token expired." }), status: 401 },
+      { body: JSON.stringify({ detail: "No refresh token." }), status: 401 },
+    ]);
+
+    await expect(api.listAccounts()).rejects.toMatchObject({
+      status: 401,
+      message: "Access token expired.",
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces concurrent 401s into a single refresh rotation", async () => {
+    setTokens("stale-access", "csrf");
+    let refreshCalls = 0;
+    let accountCalls = 0;
+    const fetcher = vi.fn().mockImplementation((url: string, _init: RequestInit) => {
+      if (url === "/api/auth/refresh") {
+        refreshCalls += 1;
+        return Promise.resolve(
+          new Response(JSON.stringify({ access_token: "fresh", csrf_token: "c2" }), {
+            status: 200,
+            headers: json,
+          }),
+        );
+      }
+      accountCalls += 1;
+      if (accountCalls <= 2) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ detail: "expired" }), { status: 401, headers: json }),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: json }));
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    const [first, second] = await Promise.all([api.listAccounts(), api.listAccounts()]);
+
+    expect(first).toEqual([]);
+    expect(second).toEqual([]);
+    // Presenting the same refresh token twice would trip reuse detection and
+    // revoke the session — exactly one rotation must happen.
+    expect(refreshCalls).toBe(1);
+    expect(fetcher).toHaveBeenCalledTimes(5);
   });
 });
