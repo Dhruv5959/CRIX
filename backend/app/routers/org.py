@@ -47,7 +47,7 @@ from app.schemas import (
     OrgRole,
     OrgUpdateRequest,
 )
-from app.services.email import send_email
+from app.services.email import EmailDeliveryError, send_email
 
 router = APIRouter(prefix="/api", tags=["organization"])
 
@@ -349,12 +349,21 @@ def create_invitation(
     db.refresh(invite)
 
     link = f"{settings.public_base_url}/invite?token={raw}"
-    send_email(
-        to=email,
-        subject=f"You have been invited to join {db.get(Organization, membership.org_id).name} on CRIX",
-        body=f"Accept your invitation within {INVITATION_TTL_DAYS} days:\n\n{link}\n",
-        settings=settings,
-    )
+    try:
+        send_email(
+            to=email,
+            subject=f"You have been invited to join {db.get(Organization, membership.org_id).name} on CRIX",
+            body=f"Accept your invitation within {INVITATION_TTL_DAYS} days:\n\n{link}\n",
+            settings=settings,
+        )
+    except EmailDeliveryError as exc:
+        # The recipient must not be able to use a token that was never delivered.
+        invite.used_at = now
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Invitation email could not be delivered. Please try again later.",
+        ) from exc
     audit.record(
         db,
         action="invitation.created",

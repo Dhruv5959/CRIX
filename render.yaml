@@ -2,6 +2,7 @@ services:
   - type: web
     name: crix-api
     runtime: python
+    plan: free
     rootDir: backend
     buildCommand: pip install --no-cache-dir -r requirements.txt
     # This service must remain a single instance until the in-process rate
@@ -27,18 +28,12 @@ services:
         sync: false
       - key: CRIX_PUBLIC_BASE_URL
         sync: false
-      - key: CRIX_SMTP_HOST
-        sync: false
-      - key: CRIX_SMTP_PORT
-        value: "587"
-      - key: CRIX_SMTP_USER
-        sync: false
-      - key: CRIX_SMTP_PASSWORD
+      - key: CRIX_EMAIL_PROVIDER
+        value: resend
+      - key: CRIX_RESEND_API_KEY
         sync: false
       - key: CRIX_EMAIL_FROM
         sync: false
-      - key: CRIX_SMTP_START_TLS
-        value: "true"
       - key: CRIX_TRUST_PROXY_HEADERS
         value: "true"
       - key: CRIX_BREACH_EMAIL_PROVIDER

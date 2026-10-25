@@ -1,13 +1,13 @@
-"""Outbound email for password reset / verification.
+"""Outbound transactional email for password reset / verification.
 
 Two transports, chosen by configuration:
 
 * Development (no SMTP configured): the message is written to
   ``backend/artifacts/outbox/`` — a local dev mailbox. This keeps reset
   tokens OUT of application logs (§14) while remaining usable locally.
-* Production (``CRIX_SMTP_HOST`` configured): the message is sent over SMTP
-  with optional STARTTLS. ``Settings.assert_production_safe`` refuses to start
-  in production without a configured host, so a request never silently.
+* Production can use Resend's HTTPS API (required by the Render Free Blueprint)
+  or SMTP on a paid host. Settings validation refuses to start without the
+  selected provider's credentials.
 
 Only the transport label is returned to callers/audit — never the token.
 """
@@ -18,13 +18,16 @@ import smtplib
 from email.message import EmailMessage
 from pathlib import Path
 
+import httpx
+
 from app.config import Settings
 
 _OUTBOX = Path(__file__).resolve().parents[2] / "artifacts" / "outbox"
+_RESEND_EMAILS_URL = "https://api.resend.com/emails"
 
 
 class EmailDeliveryError(RuntimeError):
-    """A non-sensitive, caller-safe SMTP delivery failure."""
+    """A non-sensitive, caller-safe transactional email delivery failure."""
 
 
 def _build_message(*, to: str, subject: str, body: str, settings: Settings) -> EmailMessage:
@@ -39,9 +42,35 @@ def _build_message(*, to: str, subject: str, body: str, settings: Settings) -> E
 
 def send_email(*, to: str, subject: str, body: str, settings: Settings) -> str:
     """Deliver an email. Returns a transport label for audit (never the token)."""
+    if settings.email_provider == "resend":
+        if not settings.resend_api_key:
+            raise EmailDeliveryError("Email delivery is temporarily unavailable.")
+        try:
+            response = httpx.post(
+                _RESEND_EMAILS_URL,
+                headers={
+                    "Authorization": f"Bearer {settings.resend_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": settings.email_from,
+                    "to": [to],
+                    "subject": subject,
+                    "text": body,
+                },
+                timeout=15.0,
+            )
+        except httpx.HTTPError as exc:
+            # Do not expose provider exceptions, response bodies, recipient
+            # addresses, or the credential through API responses or audit logs.
+            raise EmailDeliveryError("Email delivery is temporarily unavailable.") from exc
+        if not 200 <= response.status_code < 300:
+            raise EmailDeliveryError("Email delivery is temporarily unavailable.")
+        return "resend"
+
     message = _build_message(to=to, subject=subject, body=body, settings=settings)
 
-    if settings.smtp_host:
+    if settings.email_provider == "smtp" and settings.smtp_host:
         # Explicitly configured SMTP wins in every environment (dev too), so
         # production behavior can be exercised locally before the real deploy.
         try:
@@ -59,10 +88,10 @@ def send_email(*, to: str, subject: str, body: str, settings: Settings) -> str:
 
     if settings.is_production:
         # Defense in depth: assert_production_safe already fails startup
-        # without SMTP, so reaching this line means config was mutated at
+        # without the selected provider, so reaching this line means config was mutated at
         # runtime. Failing loudly beats silently swallowing a reset link.
         raise RuntimeError(
-            "CRIX_SMTP_HOST is not configured; cannot send email in production."
+            "Transactional email provider is not configured; cannot send email in production."
         )
 
     _OUTBOX.mkdir(parents=True, exist_ok=True)

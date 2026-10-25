@@ -4,6 +4,7 @@ All secrets come from the environment (Rule §14). The defaults are obvious
 dev-only placeholders so a fresh clone can boot; production MUST override them.
 """
 from functools import lru_cache
+from email.utils import parseaddr
 from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import parse_qs, urlparse
@@ -114,10 +115,11 @@ class Settings(BaseSettings):
     # rotate rate-limit buckets or forge recorded IPs.
     trust_proxy_headers: bool = False
 
-    # --- SMTP (production email transport) ------------------------------------
-    # Dev writes .eml files to backend/artifacts/outbox/. Production must
-    # configure a real SMTP host or refuse to start (assert_production_safe):
-    # password reset and invitations are dead ends without working email.
+    # --- Transactional email transport ---------------------------------------
+    # Render Free blocks SMTP ports 25/465/587, so its Blueprint uses Resend's
+    # HTTPS API. Local development retains SMTP support and the dev outbox.
+    email_provider: Literal["smtp", "resend"] = "smtp"
+    resend_api_key: str = ""
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""
@@ -275,14 +277,26 @@ class Settings(BaseSettings):
                 raise RuntimeError(
                     "CRIX_TOKEN_ENCRYPTION_KEY must be a valid Fernet key in production."
                 ) from exc
-            if not self.smtp_host:
+            sender_address = parseaddr(self.email_from)[1]
+            sender_domain = sender_address.rpartition("@")[2].lower()
+            if (
+                not sender_address
+                or "@" not in sender_address
+                or "." not in sender_domain
+                or sender_domain.endswith(".local")
+            ):
                 raise RuntimeError(
-                    "CRIX_SMTP_HOST must be set in production: password reset and "
-                    "invitations are unusable without it."
+                    "CRIX_EMAIL_FROM must use a non-local fully qualified sender domain in production."
                 )
-            if not self.smtp_user or not self.smtp_password:
+            if self.email_provider == "resend":
+                if not self.resend_api_key:
+                    raise RuntimeError(
+                        "CRIX_RESEND_API_KEY must be set when CRIX_EMAIL_PROVIDER=resend."
+                    )
+            elif not self.smtp_host or not self.smtp_user or not self.smtp_password:
                 raise RuntimeError(
-                    "CRIX_SMTP_USER and CRIX_SMTP_PASSWORD must be set in production."
+                    "SMTP production delivery requires CRIX_SMTP_HOST, CRIX_SMTP_USER, "
+                    "and CRIX_SMTP_PASSWORD when CRIX_EMAIL_PROVIDER=smtp."
                 )
             if not _is_exact_https_origin(self.public_base_url):
                 raise RuntimeError(
