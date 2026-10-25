@@ -1,3 +1,5 @@
+import { routes } from "@vercel/config/v1";
+
 // Keep browser calls same-origin: Vercel proxies /api to Render, so CRIX's
 // secure httpOnly refresh cookie stays first-party and CSRF checks keep their
 // intended browser behavior. CRIX_BACKEND_URL is a Vercel Config variable,
@@ -46,11 +48,11 @@ export const config = {
   buildCommand: "npm run build",
   outputDirectory: "dist",
   rewrites: [
-    // Keep this concrete string in the generated config: every rewrite object
-    // Vercel receives has the required `destination` property.
-    { source: "/api/:path*", destination: apiDestination },
+    // Use Vercel's own route helper so config evaluation and deployment use
+    // the same validated rewrite shape.
+    routes.rewrite("/api/:path*", apiDestination),
     // This documented catch-all is intentionally last so API traffic never
     // falls through to the SPA shell.
-    { source: "/(.*)", destination: "/index.html" },
+    routes.rewrite("/(.*)", "/index.html"),
   ],
 };
