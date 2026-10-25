@@ -22,8 +22,9 @@ in its production product.
 - Uses HIBP Pwned Passwords k-anonymity for exposure checks. The browser sends
   only a five-character SHA-1 prefix for the password-hygiene tool; CRIX never
   stores plaintext passwords or complete lookup hashes.
-- Delivers verification, reset, and invitation links through SMTP in
-  production. Development uses a local ignored outbox only.
+- Delivers verification, reset, and invitation links through a configured
+  server-side transactional email provider. The Render Free Blueprint uses
+  Resend's HTTPS API; local development can use SMTP or an ignored outbox.
 
 ## Data honesty
 
@@ -68,7 +69,8 @@ and hosted acceptance checklist, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Deployment
 
-The intended production split is Vercel (SPA), Render (FastAPI), Supabase
-(PostgreSQL), and a transactional SMTP provider. The repository includes
+The intended deployment split is Vercel (SPA), Render (FastAPI), Supabase
+(PostgreSQL), and a transactional email provider. Render Free uses Resend's
+HTTPS API because outbound SMTP ports are blocked. The repository includes
 render.yaml and frontend/vercel.mjs, but a deployment is not considered live
 until the public URLs have been tested end-to-end.

@@ -365,6 +365,7 @@ def test_production_configuration_requires_postgres_tls_and_real_delivery():
         public_base_url="https://app.example.com",
         trust_proxy_headers=True,
         token_encryption_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+        email_from="CRIX <no-reply@example.com>",
         smtp_host="smtp.example.com",
         smtp_user="smtp-user",
         smtp_password="smtp-password",
@@ -372,6 +373,11 @@ def test_production_configuration_requires_postgres_tls_and_real_delivery():
         allow_fixture_connectors=False,
     )
     Settings(**safe).assert_production_safe()
+
+    resend = {**safe, "email_provider": "resend", "resend_api_key": "test-resend-key"}
+    Settings(**resend).assert_production_safe()
+    with pytest.raises(RuntimeError, match="RESEND_API_KEY"):
+        Settings(**{**resend, "resend_api_key": ""}).assert_production_safe()
 
     unsafe = Settings(**{**safe, "database_url": "sqlite:///./crix.db"})
     with pytest.raises(RuntimeError, match="PostgreSQL"):

@@ -206,8 +206,10 @@ tested with the network boundary stubbed; only the credentials are absent.
   prioritization. They are not calibrated against real compromise data, because
   none exists for this system — and labels are never generated from CRIX's own
   risk formula.
-- **Email delivery:** password-reset tokens write to a dev outbox/log locally;
-  production requires SMTP configuration. Token values are excluded from logs.
+- **Email delivery:** password-reset tokens write to a dev outbox locally;
+  production requires configured transactional delivery (Resend HTTPS API on
+  Render Free, or SMTP on a host that supports it). Token values are excluded
+  from logs; hosted delivery still requires a verified sender and real test.
 - **DistilBERT comparison** was not attempted; the stronger-model slot reports
   "not yet measured" rather than a fabricated number. TF-IDF + Logistic
   Regression is the guaranteed baseline.

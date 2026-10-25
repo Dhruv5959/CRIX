@@ -150,3 +150,29 @@ def test_invitation_response_never_includes_a_password(client):
     )
     body = created.json()
     assert "password" not in body and "password_hash" not in body
+
+
+def test_invitation_delivery_failure_returns_unavailable_and_invalidates_token(
+    client, db_session, monkeypatch
+):
+    from sqlalchemy import select
+
+    from app.models import Invitation
+    from app.services.email import EmailDeliveryError
+
+    def fail_delivery(**_kwargs):
+        raise EmailDeliveryError("Email delivery is temporarily unavailable.")
+
+    monkeypatch.setattr("app.routers.org.send_email", fail_delivery)
+    admin = register_org_admin(client, "own9@inv.example.com", org_name="Inv Co 9")
+    response = client.post(
+        "/api/invitations",
+        headers=admin,
+        json={"email": "delivery-fail@inv.example.com", "role": "MEMBER"},
+    )
+    assert response.status_code == 503
+    assert "invite_link" not in response.text
+    row = db_session.scalar(
+        select(Invitation).where(Invitation.email == "delivery-fail@inv.example.com")
+    )
+    assert row is not None and row.used_at is not None

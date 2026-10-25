@@ -66,6 +66,16 @@ export class ApiError extends Error {
   }
 }
 
+function responseErrorMessage(status: number): string {
+  if (status === 404) {
+    return "CRIX could not reach the requested API endpoint (HTTP 404). Please contact your administrator.";
+  }
+  if (status === 502 || status === 503 || status === 504) {
+    return `CRIX is temporarily unavailable (HTTP ${status}). Please try again shortly.`;
+  }
+  return `Request failed (HTTP ${status}). Please try again.`;
+}
+
 async function request<T>(
   path: string,
   options: RequestInit & { auth?: boolean; csrf?: boolean } = {},
@@ -87,10 +97,26 @@ async function request<T>(
   });
   if (response.status === 204) return undefined as T;
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    // Hosting/proxy failures can be plain text or HTML, including a SPA
+    // fallback served with status 200. Never expose those bodies or treat
+    // them as a successful API result.
+    throw new ApiError(
+      response.status,
+      response.ok
+        ? "CRIX returned an unexpected response. Please try again or contact your administrator."
+        : responseErrorMessage(response.status),
+    );
+  }
   if (!response.ok) {
-    const detail = data?.detail;
-    throw new ApiError(response.status, typeof detail === "string" ? detail : "Request failed");
+    const detail = data && typeof data === "object" && "detail" in data ? data.detail : null;
+    throw new ApiError(
+      response.status,
+      typeof detail === "string" ? detail : responseErrorMessage(response.status),
+    );
   }
   return data as T;
 }
