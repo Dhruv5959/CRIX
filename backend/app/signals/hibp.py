@@ -10,11 +10,14 @@ When the API key is absent the email lookup returns UNAVAILABLE (never "safe").
 """
 from __future__ import annotations
 
+import re
+
 import httpx
 
 BREACH_API = "https://haveibeenpwned.com/api/v3/breachedaccount/{account}"
 PWNED_PASSWORDS_RANGE = "https://api.pwnedpasswords.com/range/{prefix}"
 USER_AGENT = "CRIX-Capstone/0.1 (security-signal-correlator)"
+_RANGE_LINE = re.compile(r"^[0-9A-F]{35}:\d+$", re.IGNORECASE)
 
 
 class HIBPUnavailable(RuntimeError):
@@ -52,7 +55,13 @@ class HIBPClient:
             raise HIBPUnavailable("HIBP API key rejected.")
         if response.status_code >= 400:
             raise HIBPUnavailable(f"HIBP returned HTTP {response.status_code}.")
-        return response.json()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise HIBPUnavailable("HIBP returned a malformed response body.") from exc
+        if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+            raise HIBPUnavailable("HIBP returned an unexpected response body.")
+        return payload
 
     def pwned_password_range(self, prefix: str) -> str:
         """Proxy a Pwned Passwords range query. ``prefix`` is 5 hex chars."""
@@ -66,9 +75,17 @@ class HIBPClient:
             )
         except httpx.HTTPError as exc:
             raise HIBPUnavailable(f"Pwned Passwords request failed: {exc}") from exc
+        if response.status_code == 429:
+            raise HIBPUnavailable("Pwned Passwords rate limit reached.")
         if response.status_code >= 400:
             raise HIBPUnavailable(f"Pwned Passwords returned HTTP {response.status_code}.")
-        return response.text
+        # A successful range response consists solely of 35-character SHA-1
+        # suffixes and decimal counts. Do not turn an empty HTML/error body or
+        # malformed payload into a false local "not found" result.
+        lines = [line.strip() for line in response.text.splitlines() if line.strip()]
+        if not lines or any(_RANGE_LINE.fullmatch(line) is None for line in lines):
+            raise HIBPUnavailable("Pwned Passwords returned a malformed range response.")
+        return "\n".join(lines)
 
 
 def classify_session_capability(breach: dict) -> bool:

@@ -281,3 +281,35 @@ on top, each step stated in `docs/PROGRESS.md`.
 * Interactions are evaluated on the run-level feature vector (not per account);
   preserved from the original defensible model rather than re-scoped here.
 * One score per analysis run; per-asset score roll-ups are future work.
+
+---
+
+## 10. Semester-7 addendum: event-type → feature-group mapping (isk-2.1 unchanged)
+
+The **formula, weights, interactions, and model version did not change**; this
+addendum documents only which *event types* feed the existing feature pools
+(max-severity aggregation) as of the Semester-7 features:
+
+| Event type | Feature group | Introduced by |
+|---|---|---|
+| PHISHING_URL_DETECTED | phishing | §6.C threat-feed URL checker |
+| ACCESS_REVIEW_NEEDED | permissions | §9.F organization access audit |
+| EMAIL_AUTH_WEAKNESS | — deliberately unmapped | §7.D domain posture |
+| TLS_POSTURE_WEAK | — deliberately unmapped | §7.D domain posture |
+| SECRET_PATTERN_MATCHED | — deliberately unmapped | §8.E repository secret scan |
+
+Rationale for the two mapped additions: a threat-feed verdict on a URL is
+direct phishing evidence, and an organization-wide access-review candidate is
+the org-level sibling of the per-account permission audit — both are already
+owned by existing pools, so no new weight or interaction enters the model and
+the model version stays isk-2.1.
+
+Rationale for the unmapped ones: domain DNS/TLS posture and repository-borne
+secrets are properties of a *company asset* (org-scoped findings), not
+account-breach observations; assigning them to an existing per-account feature
+pool would be an undocumented model change. They are persisted as findings,
+shown in the UI, correlated declaratively (phished_weak_email_auth), and
+tracked as remediation-visible evidence — but they do not contribute points to
+the account risk score until a future version of this model documents that.
+This is pinned by tests (	est_feature_c.py, 	est_feature_d.py keep the
+EVENT_TO_FEATURE map regression-checked via the unchanged legacy score).

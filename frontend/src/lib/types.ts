@@ -46,10 +46,27 @@ export interface PasswordExposureOutcome {
 export interface BreachMonitorStatus {
   enabled: boolean;
   registered_email: string;
+  /** Verified control of the mailbox: consent gate for automatic monitoring. */
+  email_verified: boolean;
   /** Placeholder-style domain: any provider verdict is not meaningful evidence. */
   placeholder_domain: boolean;
   last_breach_check_at: string | null;
   refresh_after_hours: number;
+}
+
+/** §Email verification: requested via email only — the token is NEVER in a
+ * response (transport label tells dev smtp/outbox/SMT apart for honesty). */
+export interface EmailVerifyRequestResult {
+  sent_to: string;
+  transport: string;
+  expires_at: string;
+  note: string;
+}
+
+export interface EmailVerifyConfirmResult {
+  verified: string; // "true"
+  email: string;
+  note: string;
 }
 
 export interface TokenResponse {
@@ -357,6 +374,134 @@ export interface PhishingResult {
   model_version: string;
   signals: Array<{ type: string; detail: string[]; weight: string }>;
   provenance: string;
+  note: string;
+  // §6.C threat-intel verdicts for submitted/extracted URLs (may be empty).
+  url_report: Array<{
+    provider: string;
+    provider_label: string;
+    outcome: string; // FINDING | REPORTED_UNVERIFIED | NO_MATCH_IN_CONFIGURED_FEEDS | UNAVAILABLE | NOT_CONFIGURED
+    reason: string;
+    url_redacted: string;
+    evidence: Record<string, unknown>;
+  }>;
+}
+
+// Per-provider row colors for the URL report, mapped from outcomes (§6.C):
+// suspicion surfaces loudly, "no match" is neutral (never styled as safe).
+export function urlOutcomesColor(outcome: string): string {
+  if (outcome === "FINDING") return "text-rose-300";
+  if (outcome === "REPORTED_UNVERIFIED") return "text-amber-300";
+  if (outcome === "NO_MATCH_IN_CONFIGURED_FEEDS") return "text-ink-muted";
+  return "text-ink-faint";
+}
+
+// --- §7.D domain posture (admin-only, org-scoped) ---------------------------
+export interface DomainOwnership {
+  challenge_issued: boolean;
+  verified: boolean;
+  verified_at: string | null;
+  challenge_issued_at: string | null;
+}
+
+export interface DomainListEntry {
+  asset_id: string;
+  label: string;
+  criticality: number;
+  ownership: DomainOwnership;
+}
+
+export interface DomainRegistrationResult extends DomainListEntry {
+  // Shown exactly once; CRIX stores only the SHA-256 hash.
+  verify_token?: string;
+  verify_instructions?: string;
+}
+
+export interface DomainCheckRow {
+  check: string;
+  status: string; // FINDING | CHECKED_SAFE | UNAVAILABLE | NOT_CHECKED
+  observed?: string;
+  reason?: string;
+  remediation?: string | null;
+  selector?: string;
+  [key: string]: unknown;
+}
+
+export interface DomainChecksResult {
+  asset_id: string;
+  ownership: DomainOwnership;
+  checks: DomainCheckRow[];
+  events: SecurityEvent[];
+  note: string;
+}
+
+// --- §8.E repository secret scan (admin-only, org-scoped) --------------------
+export interface SecretScanFinding {
+  path: string;
+  line: number;
+  category: string;
+  severity_hint: number;
+  fingerprint: string; // sha256:XXXXXX — the value itself is never stored
+  value_stored: false;
+  key_hint?: string;
+}
+
+export interface RepoScanResult {
+  asset_id: string;
+  files_scanned: number;
+  bytes_scanned: number;
+  skipped_entries: Array<{ path: string; reason: string }>;
+  truncated_scan: boolean;
+  findings: SecretScanFinding[];
+  events: SecurityEvent[];
+  note: string;
+}
+
+// --- §9.F access audit (admin declares; members see their own rows) ----------
+export interface AccessRecordRow {
+  id: string;
+  membership_id: string;
+  member_email: string | null;
+  member_role: string | null;
+  member_active: boolean | null;
+  asset_id: string | null;
+  asset_label: string | null;
+  level: string; // VIEW | USE | ADMIN
+  provenance: string;
+  status: string; // ACTIVE | REMOVED
+  granted_at: string;
+  last_reviewed_at: string | null;
+  created_at: string;
+}
+
+export interface AccessCandidatesAsset {
+  asset_id: string;
+  asset_label: string | null;
+  criticality: number | null;
+  candidate_count: number;
+  severity: number;
+  candidates: Array<{
+    record_id: string;
+    membership_ref: string;
+    membership_id: string;
+    level: string;
+    severity: number;
+    reasons: Array<{
+      code: string; // departed | elevated | stale
+      severity: number;
+      age_days?: number | null;
+      note?: string;
+      days_since_review?: number | null;
+    }>;
+    granted_at: string | null;
+    last_reviewed_at: string | null;
+  }>;
+}
+
+export interface AccessCandidatesResult {
+  review_interval_days: number;
+  generated_at: string;
+  assets: AccessCandidatesAsset[];
+  events: SecurityEvent[];
   note: string;
 }
 

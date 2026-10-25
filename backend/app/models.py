@@ -147,6 +147,37 @@ class PasswordResetToken(Base):
     )
 
 
+class EmailVerificationToken(Base):
+    """Single-use, short-expiry email-verification token (hash stored, not raw).
+
+    Issued to prove control of the registered address; consumed (``used_at``)
+    on successful verification. A NEW request replaces pending tokens for that
+    user, so inboxes are never threatened with two live challenges.
+    """
+
+    __tablename__ = "email_verification_tokens"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
+
+    @property
+    def is_pending(self) -> bool:
+        if self.used_at is not None:
+            return False
+        expires = self.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=dt.timezone.utc)
+        return expires > _now()
+
+
 # --------------------------------------------------------------------------- #
 # Signals & events
 # --------------------------------------------------------------------------- #
@@ -749,6 +780,77 @@ class Invitation(Base):
     used_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     accepted_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     invited_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
+
+
+class AssetAccessRecord(Base, TimestampMixin):
+    """An ADMIN-DECLARED statement of who (which member) can access a company
+    asset, and at what level (VIEW < USE < ADMIN) — §9.F.
+
+    This is a declaration, NOT an observed fact and NOT a grant store: CRIX
+    never talks to any identity provider to verify it. Rows are therefore
+    provenance-labeled (``ADMIN_DECLARED``) and the honest claim "as declared
+    by an administrator" rides on every finding derived from them.
+
+    ``last_reviewed_at`` is the access-review anchor: an admin stamps it when
+    they re-confirm the declaration. A never-reviewed or long-unreviewed row
+    becomes a stale-access candidate; a departed member (``is_active=False``)
+    with a live row becomes a departed-access candidate.
+    """
+
+    __tablename__ = "asset_access_records"
+    __table_args__ = (
+        UniqueConstraint("org_id", "membership_id", "org_asset_id", name="uq_access_record"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    org_asset_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("org_assets.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    membership_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("memberships.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    level: Mapped[str] = mapped_column(String(12), nullable=False)  # VIEW | USE | ADMIN
+    provenance: Mapped[str] = mapped_column(
+        String(24), nullable=False, server_default="ADMIN_DECLARED"
+    )
+    status: Mapped[str] = mapped_column(String(12), nullable=False, server_default="ACTIVE")
+    granted_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
+    last_reviewed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    asset: Mapped[OrgAsset] = relationship()
+    membership: Mapped[Membership] = relationship()
+
+
+class AssetAccessRecordHistory(Base):
+    """Append-only change log for one access record (§9.F evidence chain).
+
+    One row per lifecycle event: the record was CREATED, REVIEWED (the
+    declaration re-confirmed), or REMOVED. ``actor_user_id`` is the admin who
+    performed the action; ``detail`` carries the redacted field changes (no
+    free-form blobs). Deletion of the record cascades — the history documents
+    a record, not an identity.
+    """
+
+    __tablename__ = "asset_access_record_history"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    record_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("asset_access_records.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    org_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    actor_user_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    method: Mapped[str] = mapped_column(String(12), nullable=False)  # CREATED | REVIEWED | REMOVED
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_now, nullable=False
     )

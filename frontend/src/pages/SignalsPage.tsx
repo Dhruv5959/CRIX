@@ -1,16 +1,22 @@
 import { useEffect, useState } from "react";
 import { Plus, ShieldCheck, Trash2, Radar } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { checkPasswordPwned, passwordsMatch } from "@/lib/password";
 import { formatCheckedAt, summarizeBreachLookup } from "@/lib/breach";
 import type {
   Account,
   BreachMonitorStatus,
+  DomainChecksResult,
+  DomainListEntry,
+  DomainRegistrationResult,
+  OrgAsset,
   PasswordExposureOutcome,
   PhishingResult,
+  RepoScanResult,
   SecurityEvent,
 } from "@/lib/types";
+import { urlOutcomesColor } from "@/lib/types";
 import { BreachResult } from "@/components/BreachResult";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,7 +25,7 @@ import { Switch } from "@/components/ui/switch";
 import { ProvenanceBadge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
-const TABS = ["Breach / Exposure", "Password Hygiene", "Phishing", "Permissions"] as const;
+const TABS = ["Breach / Exposure", "Password Hygiene", "Phishing", "Permissions", "Domain posture", "Repo scan"] as const;
 type Tab = (typeof TABS)[number];
 
 // The account the backend guarantees for every user: their registered work
@@ -39,7 +45,7 @@ function AccountManager({
   onChanged: () => void;
 }) {
   const [label, setLabel] = useState("");
-  const [service, setService] = useState("Google");
+  const [service, setService] = useState("Company SaaS");
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -105,12 +111,12 @@ function AccountManager({
         <div className="grid grid-cols-2 gap-3">
           <div className="col-span-2">
             <Label>Label</Label>
-            <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="My Gmail" />
+            <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Finance SaaS" />
           </div>
           <div>
             <Label>Service</Label>
             <Select value={service} onChange={(e) => setService(e.target.value)}>
-              {["Google", "GitHub", "Microsoft", "Apple", "Dropbox", "PayPal", "Coinbase", "Steam", "Reddit"].map((s) => (
+              {["Company SaaS", "GitHub", "Microsoft 365", "Dropbox", "Slack", "Other"].map((s) => (
                 <option key={s}>{s}</option>
               ))}
             </Select>
@@ -158,12 +164,9 @@ export default function SignalsPage() {
       <header>
         <h1 className="text-2xl font-semibold text-ink">Connected Signals</h1>
         <p className="mt-1 text-sm text-ink-muted">
-          Feed CRIX the signals it correlates. Live provider connections live on the{" "}
-          <a href="#/connections" className="text-accent hover:underline">
-            Live Connections
-          </a>{" "}
-          page; every signal here is either a live lookup against a real breach
-          provider, or entered/simulated by you — and labeled as such.
+          Feed CRIX the signals it correlates. CRIX does not connect to employee inboxes or OAuth
+          accounts. Each signal is either a live lookup against a real breach provider or a
+          member-entered scenario, and is labeled accordingly.
         </p>
       </header>
 
@@ -200,6 +203,10 @@ export default function SignalsPage() {
           )}
           {selected && tab === "Phishing" && <PhishingForm accountId={selected} onDone={push} />}
           {selected && tab === "Permissions" && <PermissionsForm accountId={selected} onDone={push} />}
+          {/* §7.D is ORG-scoped (admin-only), not account-bound: it renders
+              without an account selection, unlike the four account tabs. */}
+          {tab === "Domain posture" && <DomainPosturePanel onDone={push} />}
+          {tab === "Repo scan" && <RepoScanPanel onDone={push} />}
 
           {log.length > 0 && (
             <Card>
@@ -241,6 +248,10 @@ function BreachMonitorPanel({ onDone }: { onDone: (m: string) => void }) {
     };
   }, []);
 
+  const [verifyHint, setVerifyHint] = useState("");
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [verifyNote, setVerifyNote] = useState("");
+
   async function toggle(enabled: boolean) {
     setBusy(true);
     try {
@@ -254,8 +265,32 @@ function BreachMonitorPanel({ onDone }: { onDone: (m: string) => void }) {
             : "monitoring on — first check could not be consulted (recorded as UNKNOWN)"
           : "monitoring off — automatic sign-in lookups stop",
       );
+    } catch (e) {
+      setVerifyHint(
+        e instanceof ApiError && e.status === 403
+          ? "Verify this email address first — send the verification email below."
+          : e instanceof Error
+            ? e.message
+            : "Could not change monitoring.",
+      );
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function sendVerification() {
+    setVerifyBusy(true);
+    setVerifyHint("");
+    try {
+      const result = await api.requestEmailVerification();
+      setVerifyNote(
+        `Verification email sent to ${result.sent_to} (delivered via ${result.transport}). ` +
+          "Open the link in that mailbox to verify — the token is never shown here.",
+      );
+    } catch (e) {
+      setVerifyHint(e instanceof Error ? e.message : "Could not send the verification email.");
+    } finally {
+      setVerifyBusy(false);
     }
   }
 
@@ -269,7 +304,7 @@ function BreachMonitorPanel({ onDone }: { onDone: (m: string) => void }) {
         description={
           "At sign-in, re-check your registered work email in breach data — only when the " +
           "last check is older than 24h. Consent is stored with a timestamp; revoke anytime. " +
-          "Manual checks below never require this switch."
+          "This explicit consent also gates manual breach checks below."
         }
       />
       <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-ink-faint">
@@ -277,6 +312,12 @@ function BreachMonitorPanel({ onDone }: { onDone: (m: string) => void }) {
           Consent:{" "}
           <span className="text-ink-muted">
             {status?.enabled ? "granted" : "not granted"}
+          </span>
+        </span>
+        <span>
+          Email verified:{" "}
+          <span className={status?.email_verified ? "text-emerald-300" : "text-ink-muted"}>
+            {status ? (status.email_verified ? "yes" : "not yet") : "unknown"}
           </span>
         </span>
         <span>
@@ -289,6 +330,20 @@ function BreachMonitorPanel({ onDone }: { onDone: (m: string) => void }) {
           Refresh cadence: <span className="text-ink-muted">24h (offline logs show as UNKNOWN)</span>
         </span>
       </div>
+      {status && !status.email_verified && (
+        <div className="mt-2 rounded border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-200">
+          <p>
+            Automatic monitoring of the registered address needs proof that this mailbox
+            is yours: enabling consent without verification could point the watchtower at
+            the wrong inbox.
+          </p>
+          <Button size="sm" onClick={sendVerification} disabled={verifyBusy} className="mt-2">
+            Send verification email
+          </Button>
+        </div>
+      )}
+      {verifyNote && <p className="mt-2 text-[11px] text-emerald-200">{verifyNote}</p>}
+      {verifyHint && <p className="mt-2 text-[11px] text-amber-200">{verifyHint}</p>}
       {status?.placeholder_domain && (
         <p className="mt-2 text-[11px] leading-relaxed text-sky-200">
           The registered address uses a placeholder-style domain, so any provider verdict on
@@ -357,7 +412,6 @@ function BreachForm({
   accounts: Account[];
   onDone: (m: string) => void;
 }) {
-  const [email, setEmail] = useState("");
   const [exposure, setExposure] = useState<"NONE" | "SESSION_ONLY" | "PASSWORD_AND_SESSION">("NONE");
   const [mfaBypass, setMfaBypass] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -365,20 +419,9 @@ function BreachForm({
   // Most recent stored check for this account, shown right after login so the
   // registered work email has an answer on screen without re-running a call.
   const [stored, setStored] = useState<SecurityEvent[] | null>(null);
-  const [prefilledFor, setPrefilledFor] = useState<string | null>(null);
 
   const account = accounts.find((a) => a.account_id === accountId);
-
-  // Prefill the check target with the selected account's email (your work
-  // email is prefilled by default). Prefills exactly once per selected
-  // account, so a value you typed is never silently overwritten.
-  useEffect(() => {
-    const a = accounts.find((x) => x.account_id === accountId);
-    if (a?.email && prefilledFor !== accountId) {
-      setEmail(a.email);
-      setPrefilledFor(accountId);
-    }
-  }, [accountId, accounts, prefilledFor]);
+  const isRegisteredWorkEmail = accountId === SELF_ACCOUNT_ID;
 
   useEffect(() => {
     let alive = true;
@@ -400,11 +443,12 @@ function BreachForm({
   }, [accountId]);
 
   async function run() {
+    if (!isRegisteredWorkEmail || !account?.email) return;
     setBusy(true);
     try {
       const res = await api.breachCheck({
         account_id: accountId,
-        email,
+        email: account.email,
         simulated_exposure_type: exposure === "NONE" ? null : exposure,
         simulated_mfa_bypass_capable: mfaBypass,
       });
@@ -413,7 +457,7 @@ function BreachForm({
       const summary = summarizeBreachLookup(res.events);
       const simulated = res.events.some((e) => e.event_type === "SESSION_EXPOSURE");
       onDone(
-        `breach lookup via ${summary.providerLabel} → ${summary.status}` +
+        `${res.cached ? "cached breach result" : "breach lookup"} via ${summary.providerLabel} → ${summary.status}` +
           (simulated ? " + simulated session scenario" : ""),
       );
     } finally {
@@ -433,14 +477,20 @@ function BreachForm({
         </div>
       </CardHeader>
       <CardBody className="space-y-4">
-        {accountId === SELF_ACCOUNT_ID && <BreachMonitorPanel onDone={onDone} />}
+        {isRegisteredWorkEmail && <BreachMonitorPanel onDone={onDone} />}
+        {!isRegisteredWorkEmail && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">
+            Email-breach checks are restricted to the verified registered work email. This prevents
+            CRIX from querying a provider about an arbitrary or personal address.
+          </div>
+        )}
         <div>
-          <Label>Email to check for breaches</Label>
-          <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+          <Label>Verified work email</Label>
+          <Input type="email" value={isRegisteredWorkEmail ? (account?.email ?? "") : ""} readOnly />
           <p className="mt-1 text-[11px] text-ink-faint">
-            {account?.email
-              ? `Prefilled with the selected account's email (${account.email}). Change it to check another address you control.`
-              : "A real lookup, sent through the CRIX backend — you are never redirected to the provider."}{" "}
+            {isRegisteredWorkEmail
+              ? "CRIX checks only this verified address after you explicitly enable monitoring."
+              : "Select your registered work email to run a real breach lookup."}{" "}
             The provider that answers is named with the result; if it cannot be
             consulted, the answer is UNKNOWN, never "safe".
           </p>
@@ -467,7 +517,7 @@ function BreachForm({
             No real infostealer database is consulted; this is a scenario you construct.
           </p>
         </div>
-        <Button variant="primary" onClick={run} disabled={busy || !email}>
+        <Button variant="primary" onClick={run} disabled={busy || !isRegisteredWorkEmail || !account?.email}>
           <Radar size={14} /> {busy ? "Checking…" : "Run breach check"}
         </Button>
         {shownEvents ? (
@@ -600,13 +650,14 @@ function HygieneForm({ accountId, accounts, onDone }: { accountId: string; accou
 
 function PhishingForm({ accountId, onDone }: { accountId: string; onDone: (m: string) => void }) {
   const [text, setText] = useState("");
+  const [urlInput, setUrlInput] = useState("");
   const [result, setResult] = useState<PhishingResult | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function analyze() {
     setBusy(true);
     try {
-      setResult(await api.analyzePhishing(text));
+      setResult(await api.analyzePhishing(text, urlInput));
     } finally {
       setBusy(false);
     }
@@ -614,8 +665,8 @@ function PhishingForm({ accountId, onDone }: { accountId: string; onDone: (m: st
   async function record() {
     setBusy(true);
     try {
-      await api.recordPhishing(accountId, text);
-      onDone("phishing message recorded to account");
+      await api.recordPhishing(accountId, text, urlInput);
+      onDone("phishing submission recorded to account");
     } finally {
       setBusy(false);
     }
@@ -635,22 +686,51 @@ function PhishingForm({ accountId, onDone }: { accountId: string; onDone: (m: st
             Analyzed by a real trained classifier. Message text is not stored — only derived signals.
           </p>
         </div>
+        <div>
+          <Label>Link to check (optional)</Label>
+          <Input
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            placeholder="https://… (checked against threat feeds — never opened)"
+          />
+          <p className="mt-1 text-[11px] text-ink-faint">
+            Query values (?token=…) are redacted automatically. Feed endpoints judge the
+            link; no match is not proof of safety.
+          </p>
+        </div>
         <div className="flex gap-2">
-          <Button variant="primary" size="sm" onClick={analyze} disabled={busy || !text}>
+          <Button variant="primary" size="sm" onClick={analyze} disabled={busy || (!text && !urlInput)}>
             Analyze
           </Button>
-          <Button size="sm" onClick={record} disabled={busy || !text || !result}>
+          <Button size="sm" onClick={record} disabled={busy || (!text && !urlInput) || !result}>
             Record to account
           </Button>
         </div>
         {result && (
           <div className="space-y-3 glass-sub rounded-lg p-4">
             <div className="flex items-center justify-between">
-              <span className={cn("text-sm font-semibold", result.label === "PHISHING" ? "text-rose-300" : "text-emerald-300")}>
+              <span className={cn("text-sm font-semibold", result.label === "PHISHING" ? "text-rose-300" : result.label === "LEGITIMATE" ? "text-emerald-300" : "text-ink-muted")}>
                 {result.label}
               </span>
-              <span className="font-mono text-xs text-ink-muted">confidence {result.confidence.toFixed(2)}</span>
+              {(result.label === "PHISHING" || result.label === "LEGITIMATE") && (
+                <span className="font-mono text-xs text-ink-muted">confidence {result.confidence.toFixed(2)}</span>
+              )}
             </div>
+            {url_report(result).length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-ink">Link verdicts</p>
+                {url_report(result).map((r) => (
+                  <div key={r.url_redacted} className="rounded border border-white/10 p-2">
+                    <p className="truncate font-mono text-[11px] text-ink-faint" title={r.url_redacted}>{r.url_redacted || "(url)"}</p>
+                    <p className={cn("text-xs font-semibold", urlOutcomesColor(r.outcome))}>
+                      {r.outcome}
+                      <span className="ml-1 font-normal text-ink-muted">— {r.provider_label}</span>
+                    </p>
+                    {r.reason && <p className="text-[11px] text-ink-faint">{r.reason}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
             {result.ai_generated_label && (
               <div className="text-xs text-ink-muted">
                 Style: <span className="text-ink">{result.ai_generated_label}</span>{" "}
@@ -672,6 +752,10 @@ function PhishingForm({ accountId, onDone }: { accountId: string; onDone: (m: st
       </CardBody>
     </Card>
   );
+}
+
+function url_report(result: PhishingResult) {
+  return result.url_report ?? [];
 }
 
 function PermissionsForm({ accountId, onDone }: { accountId: string; onDone: (m: string) => void }) {
@@ -762,5 +846,353 @@ function PermissionsForm({ accountId, onDone }: { accountId: string; onDone: (m:
         )}
       </CardBody>
     </Card>
+  );
+}
+
+// --------------------------------------------------------------------------- #
+// §7.D domain posture (org-scoped, admin-only)
+// --------------------------------------------------------------------------- //
+function checkRowColor(status: string): string {
+  if (status === "FINDING") return "text-rose-300";
+  if (status === "CHECKED_SAFE") return "text-emerald-300";
+  if (status === "NOT_CHECKED") return "text-amber-300";
+  return "text-ink-muted"; // UNAVAILABLE: muted, never styled as safe
+}
+
+function DomainPosturePanel({ onDone }: { onDone: (m: string) => void }) {
+  const [domains, setDomains] = useState<DomainListEntry[]>([]);
+  const [domainInput, setDomainInput] = useState("");
+  const [labelInput, setLabelInput] = useState("");
+  const [issued, setIssued] = useState<DomainRegistrationResult | null>(null);
+  const [verifyTokens, setVerifyTokens] = useState<Record<string, string>>({});
+  const [dkimSelectors, setDkimSelectors] = useState<Record<string, string>>({});
+  const [checks, setChecks] = useState<Record<string, DomainChecksResult>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function load() {
+    try {
+      setDomains((await api.listDomains()).domains);
+      setError("");
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not load registered domains.");
+    }
+  }
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function register() {
+    if (!domainInput.trim()) return;
+    setBusy(true);
+    try {
+      setIssued(await api.registerDomain(domainInput.trim(), labelInput.trim()));
+      setDomainInput("");
+      setLabelInput("");
+      await load();
+      onDone("domain registered; publish the TXT value shown below");
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Registration failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verify(assetId: string) {
+    setBusy(true);
+    try {
+      const response = await api.verifyDomainOwnership(assetId, verifyTokens[assetId] ?? "");
+      if (response.verified) {
+        onDone(`ownership verified for ${assetId}`);
+        await load();
+      } else if (response.reason) {
+        setError(`Verification declined: ${response.reason}`);
+      }
+      await load();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Verification failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refresh(assetId: string) {
+    setBusy(true);
+    try {
+      setIssued(await api.refreshDomainOwnership(assetId));
+      await load();
+      onDone(`new TXT challenge issued for ${assetId}`);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Refresh failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runChecks(assetId: string) {
+    setBusy(true);
+    try {
+      const selector = dkimSelectors[assetId]?.trim() || null;
+      const result = await api.runDomainChecks(assetId, selector);
+      setChecks((prev) => ({ ...prev, [assetId]: result }));
+      onDone(`domain checks run for ${assetId} (${result.events.length} findings stored)`);
+      await load();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Checks failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>Register a Company Domain</CardTitle>
+          <ProvenanceBadge provenance="USER_REPORTED" />
+        </CardHeader>
+        <CardBody className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <Label>Domain (e.g. example.com)</Label>
+              <Input value={domainInput} onChange={(e) => setDomainInput(e.target.value)} placeholder="example.com" />
+            </div>
+            <div>
+              <Label>Label (display only)</Label>
+              <Input value={labelInput} onChange={(e) => setLabelInput(e.target.value)} placeholder="marketing domain" />
+            </div>
+          </div>
+          <Button variant="primary" size="sm" onClick={register} disabled={busy || !domainInput.trim()}>
+            Register domain
+          </Button>
+          {issued?.verify_token && (
+            <div className="glass-sub rounded-lg p-4 text-xs">
+              <p className="font-semibold text-amber-300">One-time TXT value for {issued.asset_id}</p>
+              <p className="mt-1 break-all font-mono text-[11px] text-ink">{issued.verify_token}</p>
+              <p className="mt-1 text-[11px] text-ink-faint">
+                {issued.verify_instructions} CRIX stores only the SHA-256 hash of this value — it cannot be shown again.
+              </p>
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
+      {error && (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 px-4 py-2 text-xs text-rose-200">
+          {error}
+        </div>
+      )}
+
+      {domains.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Registered Domains</CardTitle>
+            <ProvenanceBadge provenance="REAL" />
+          </CardHeader>
+          <CardBody className="space-y-3">
+            {domains.map((entry) => {
+              const verified = entry.ownership.verified;
+              return (
+                <div key={entry.asset_id} className="space-y-2 rounded-lg border border-white/10 bg-white/[0.04] p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-ink">{entry.asset_id}</p>
+                      <p className="text-[11px] text-ink-faint">
+                        criticality {entry.criticality} ·{" "}
+                        {verified ? (
+                          <span className="text-emerald-300">ownership verified</span>
+                        ) : entry.ownership.challenge_issued ? (
+                          <span className="text-amber-300">TXT challenge pending</span>
+                        ) : (
+                          <span>no challenge pending</span>
+                        )}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      {!verified && (
+                        <>
+                          <Input
+                            className="w-64"
+                            value={verifyTokens[entry.asset_id] ?? ""}
+                            onChange={(e) =>
+                              setVerifyTokens((p) => ({ ...p, [entry.asset_id]: e.target.value }))
+                            }
+                            placeholder="crix-verify=… TXT value"
+                          />
+                          <Button size="sm" onClick={() => verify(entry.asset_id)} disabled={busy || !verifyTokens[entry.asset_id]}>
+                            Verify
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => refresh(entry.asset_id)} disabled={busy}>
+                            New challenge
+                          </Button>
+                        </>
+                      )}
+                      {verified && (
+                        <>
+                          <Input
+                            className="w-44"
+                            value={dkimSelectors[entry.asset_id] ?? ""}
+                            onChange={(e) =>
+                              setDkimSelectors((p) => ({ ...p, [entry.asset_id]: e.target.value }))
+                            }
+                            placeholder="DKIM selector (optional)"
+                          />
+                          <Button size="sm" variant="primary" onClick={() => runChecks(entry.asset_id)} disabled={busy}>
+                            Run checks
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  {checks[entry.asset_id] && (
+                    <ul className="space-y-1 border-t border-white/10 pt-2">
+                      {checks[entry.asset_id].checks.map((row) => (
+                        <li key={row.check} className="text-xs">
+                          <span className={cn("font-semibold", checkRowColor(row.status))}>{row.check}: {row.status}</span>
+                          {row.observed && <span className="ml-2 text-ink-faint">{row.observed}</span>}
+                          {row.reason && <span className="ml-2 text-ink-faint">{row.reason}</span>}
+                        </li>
+                      ))}
+                      <li>
+                        <p className="pt-1 text-[11px] text-ink-faint">{checks[entry.asset_id].note}</p>
+                      </li>
+                    </ul>
+                  )}
+                </div>
+              );
+            })}
+          </CardBody>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// §8.E repository secret scan (org-scoped, admin-only)
+// --------------------------------------------------------------------------- //
+function RepoScanPanel({ onDone }: { onDone: (m: string) => void }) {
+  const [repos, setRepos] = useState<OrgAsset[]>([]);
+  const [selected, setSelected] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [result, setResult] = useState<RepoScanResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    api
+      .listAssets()
+      .then((assets) =>
+        setRepos(assets.filter((a) => (a.asset_type || "").toUpperCase() === "CODE_REPOSITORY")),
+      )
+      .catch((e) => setError(e instanceof ApiError ? e.message : "Could not load repository assets."));
+  }, []);
+
+  async function scan() {
+    if (!selected || !file) return;
+    setBusy(true);
+    try {
+      setResult(await api.scanRepository(selected, file));
+      setError("");
+      onDone("repository snapshot scanned");
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Scan failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const categoryColor = (category: string) =>
+    category === "private_key_block" || category === "aws_access_key_id" || category === "google_api_key"
+      ? "text-rose-300"
+      : "text-amber-300";
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>Scan a Repository Snapshot</CardTitle>
+          <ProvenanceBadge provenance="USER_REPORTED" />
+        </CardHeader>
+        <CardBody className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <Label>Repository asset</Label>
+              <Select value={selected} onChange={(e) => { setSelected(e.target.value); setResult(null); }}>
+                <option value="">— select a CODE_REPOSITORY asset —</option>
+                {repos.map((r) => (
+                  <option key={r.id} value={r.asset_id}>{r.asset_id}</option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <Label>Working-tree snapshot (.zip)</Label>
+              <Input
+                type="file"
+                accept=".zip"
+                onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); }}
+              />
+            </div>
+          </div>
+          <p className="text-[11px] text-ink-faint">
+            Upload the current working tree as a ZIP (≤ 20 MB). CRIX scans this snapshot
+            with a documented pattern list, never the git history — a clean result says
+            &ldquo;no match in this snapshot&rdquo;, nothing more. Matched values are never
+            stored: findings carry sha256 fingerprints only.
+          </p>
+          <Button variant="primary" size="sm" onClick={scan} disabled={busy || !selected || !file}>
+            Scan snapshot
+          </Button>
+        </CardBody>
+      </Card>
+
+      {error && (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 px-4 py-2 text-xs text-rose-200">
+          {error}
+        </div>
+      )}
+
+      {result && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Scan Results — {result.asset_id}</CardTitle>
+            <ProvenanceBadge provenance="USER_REPORTED" />
+          </CardHeader>
+          <CardBody className="space-y-3 text-xs">
+            <p className="text-ink-muted">
+              {result.files_scanned} files scanned · {result.findings.length} findings
+              {result.truncated_scan ? " · scan truncated at cap" : ""}
+              {result.skipped_entries.length > 0 ? ` · ${result.skipped_entries.length} entries skipped` : ""}
+            </p>
+            {result.findings.length > 0 && (
+              <ul className="space-y-1">
+                {result.findings.map((f) => (
+                  <li key={f.fingerprint + f.path + f.line} className="rounded border border-white/10 p-2">
+                    <span className={cn("font-semibold", categoryColor(f.category))}>{f.category}</span>
+                    <span className="ml-2 font-mono text-[11px] text-ink-faint" title={f.path}>
+                      {f.path}:{f.line}
+                    </span>
+                    <span className="ml-2 font-mono text-[10px] text-ink-faint">{f.fingerprint}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {result.skipped_entries.length > 0 && (
+              <details className="rounded border border-white/10 p-2">
+                <summary className="cursor-pointer text-[11px] text-ink-faint">
+                  {result.skipped_entries.length} skipped entries (never examined)
+                </summary>
+                <ul className="mt-1 space-y-0.5 font-mono text-[10px] text-ink-faint">
+                  {result.skipped_entries.slice(0, 30).map((s, i) => (
+                    <li key={i}>{s.path} — {s.reason}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+            <p className="text-[11px] leading-relaxed text-ink-faint">{result.note}</p>
+          </CardBody>
+        </Card>
+      )}
+    </div>
   );
 }

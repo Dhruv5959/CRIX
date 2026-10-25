@@ -264,3 +264,33 @@ rules:
       30-day window ({first_seen} to {last_seen}). Repeated lures in a short
       period look like a campaign against this account rather than isolated
       noise, which is why the timing is part of the claim.
+
+  # ------------------------------------------------------------------------ #
+  # Semester-7 rule (§7.D): the only cross-event claim the domain-posture
+  # feature introduces, and a narrow one — both findings must be bound to the
+  # SAME registered company asset and observed within one week. A weak SPF/
+  # DMARC posture alone is still just one finding (not auto-scaled, and not
+  # mapped into the account risk model); the claim here is that the domain is
+  # being phished NOW while mail spoofing remains possible.
+  # ------------------------------------------------------------------------ #
+  - rule_id: phished_weak_email_auth
+    version: "1.0.0"
+    title: "Active Phishing of a Domain With Weak Email Authentication"
+    correlation_type: PHISHED_WEAK_EMAIL_AUTH
+    scope: same_asset
+    match: all
+    window_hours: 168
+    predicates:
+      - event_type: PHISHING_URL_DETECTED
+      - event_type: EMAIL_AUTH_WEAKNESS
+    severity:
+      base: 0.6
+      per_event: 0.05
+      cap: 0.92
+    confidence: min
+    explanation: >-
+      Live threat feeds flagged a URL ({account_id}) tied to the company domain
+      ({asset_id}), and that same domain's email authentication currently has
+      published defects (SPF/DMARC). A weak mail policy lets an attacker send
+      spoofed mail that trusts the real domain, so the lures and the spoofing
+      capability observed within the same 7-day window compound at the asset.

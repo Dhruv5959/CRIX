@@ -11,7 +11,7 @@ import re
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
 # --------------------------------------------------------------------------- #
@@ -25,6 +25,12 @@ class EventStatus(str, Enum):
     # Live-OAuth scope: the official provider API does not expose this signal.
     # Deliberately distinct from CHECKED_SAFE — never shown as "safe" (§12).
     UNAVAILABLE_THROUGH_PROVIDER = "UNAVAILABLE_THROUGH_PROVIDER"
+    # Threat-feed semantics (§6.C): the feeds were reachable and reported the
+    # URL absent. This is NOT "safe" — it means "no match in what we asked".
+    NO_MATCH_IN_CONFIGURED_FEEDS = "NO_MATCH_IN_CONFIGURED_FEEDS"
+    # The module partially ran (e.g. local classifier OK, providers down) or no
+    # provider was configured at all, so the analysis is knowingly incomplete.
+    ANALYSIS_INCOMPLETE = "ANALYSIS_INCOMPLETE"
 
 
 class ExposureType(str, Enum):
@@ -248,6 +254,29 @@ class OrgAssetUpdate(BaseModel):
     service_name: str | None = Field(default=None, max_length=120)
     criticality: int | None = Field(default=None, ge=1, le=5)
     owner_membership_id: str | None = None
+
+
+ACCESS_LEVELS = ("VIEW", "USE", "ADMIN")
+
+
+class AccessRecordCreate(BaseModel):
+    """§9.F: declare that a member can access a company asset at a level.
+
+    This is an ADMIN-DECLARED statement (provenance ``ADMIN_DECLARED``), not a
+   technical grant: CRIX never contacts an identity provider to verify it.
+    """
+
+    membership_id: str = Field(min_length=1, max_length=64)
+    asset_id: str = Field(min_length=1, max_length=64)
+    level: str
+
+    @field_validator("level")
+    @classmethod
+    def _valid_level(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized not in ACCESS_LEVELS:
+            raise ValueError(f"level must be one of: {', '.join(ACCESS_LEVELS)}.")
+        return normalized
 
 
 class OrgAssetResponse(BaseModel):
@@ -533,7 +562,61 @@ class PasswordHygieneRequest(BaseModel):
 
 
 class PhishingAnalyzeRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=20000)
+    """Suspicious-message / URL submission (§6.C).
+
+    Either text or url (or both) is required. Both are untrusted input and are
+    length-bounded; the url is syntax-validated and normalized downstream and
+    never opened by CRIX.
+    """
+
+    text: str = Field(default="", max_length=20000)
+    url: str = Field(default="", max_length=2048)
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "PhishingAnalyzeRequest":
+        if not self.text.strip() and not self.url.strip():
+            raise ValueError("Provide message text and/or a URL to analyze.")
+        return self
+
+
+class DomainRegisterRequest(BaseModel):
+    """§7.D domain registration. The domain must be a registrable host; the
+    label is display-only (never a matching key)."""
+
+    domain: str = Field(min_length=4, max_length=253)
+    label: str = Field(default="", max_length=200)
+    criticality: int = Field(default=3, ge=1, le=5)
+
+
+class DomainOwnershipVerifyRequest(BaseModel):
+    """The exact TXT value issued at registration/refresh (raw, shown once)."""
+
+    token: str = Field(min_length=8, max_length=160)
+
+
+class DomainChecksRequest(BaseModel):
+    """§7.D run-checks body. A DKIM selector is OPTIONAL: without one, DKIM is
+    NOT_CHECKED — CRIX never invents selectors."""
+
+    dkim_selector: str | None = Field(default=None, max_length=63)
+
+
+class UrlProviderResult(BaseModel):
+    """One threat-intelligence provider's verdict for one URL (§6.C)."""
+
+    provider: str = Field(min_length=1, max_length=40)
+    provider_label: str = Field(min_length=1, max_length=80)
+    outcome: str = Field(
+        min_length=1,
+        max_length=40,
+        description=(
+            "FINDING | REPORTED_UNVERIFIED | NO_MATCH_IN_CONFIGURED_FEEDS | "
+            "UNAVAILABLE | NOT_CONFIGURED"
+        ),
+    )
+    reason: str = ""
+    url_redacted: str = ""
+    evidence: dict[str, Any] = Field(default_factory=dict)
 
 
 class PhishingAnalyzeResponse(BaseModel):
@@ -545,6 +628,14 @@ class PhishingAnalyzeResponse(BaseModel):
     signals: list[dict[str, Any]]
     provenance: str
     note: str
+    # §6.C: per-provider verdicts for URLs extracted from text or supplied in
+    # the url field. Empty when no URL was submitted/found. Never "safe":
+    # every configured provider reports FINDING / NO_MATCH / UNAVAILABLE.
+    url_report: list[UrlProviderResult] = Field(default_factory=list)
+
+    @property
+    def urls_analyzed(self) -> bool:
+        return bool(self.url_report)
 
 
 class PermissionEntry(BaseModel):

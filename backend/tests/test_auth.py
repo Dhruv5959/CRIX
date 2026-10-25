@@ -159,6 +159,33 @@ def test_password_reset_unknown_email_does_not_enumerate(client):
     assert "reset link" in resp.json()["detail"]
 
 
+def test_password_reset_delivery_failure_leaves_no_live_token(client, db_session, monkeypatch):
+    from sqlalchemy import select
+
+    from app.models import PasswordResetToken, User
+    from app.services.email import EmailDeliveryError
+
+    email = "reset-delivery-failure@example.com"
+    client.post("/api/auth/register", json={"email": email, "password": "a-long-password-1"})
+
+    def unavailable(**_kwargs):
+        raise EmailDeliveryError("SMTP unavailable")
+
+    monkeypatch.setattr("app.routers.auth.send_email", unavailable)
+    response = client.post("/api/auth/password-reset/request", json={"email": email})
+    assert response.status_code == 202
+    assert response.json()["detail"] == (
+        "If that email exists, a reset link will be sent when email delivery is available."
+    )
+    user = db_session.scalar(select(User).where(User.email == email))
+    assert user is not None
+    tokens = list(
+        db_session.scalars(select(PasswordResetToken).where(PasswordResetToken.user_id == user.id))
+    )
+    assert len(tokens) == 1
+    assert tokens[0].used_at is not None
+
+
 def test_seeded_demo_email_is_accepted_by_the_api(client):
     """The demo account must be able to log in through the real API.
 

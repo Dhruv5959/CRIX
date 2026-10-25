@@ -6,6 +6,7 @@ dev-only placeholders so a fresh clone can boot; production MUST override them.
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import parse_qs, urlparse
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -24,6 +25,21 @@ _PROJECT_ROOT = _BACKEND_DIR.parent  # .../ (repo root)
 ENV_FILES = (str(_BACKEND_DIR / ".env"), str(_PROJECT_ROOT / ".env"))
 
 
+def _is_exact_https_origin(value: str) -> bool:
+    """Accept an origin, not a URL with a path, credentials, or query string."""
+    parsed = urlparse(value)
+    return bool(
+        parsed.scheme == "https"
+        and parsed.netloc
+        and not parsed.username
+        and not parsed.password
+        and not parsed.path
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="CRIX_",
@@ -34,6 +50,13 @@ class Settings(BaseSettings):
 
     env: str = "development"
     database_url: str = "sqlite:///./crix.db"
+    # Application-side pooling is deliberately modest: Supabase's session
+    # pooler is the intended production endpoint for this long-running API.
+    # SQLite ignores these settings entirely.
+    database_pool_size: int = 5
+    database_max_overflow: int = 5
+    database_pool_timeout_seconds: int = 30
+    database_pool_recycle_seconds: int = 1800
 
     # Auth
     jwt_secret: str = "dev-only-insecure-change-me"
@@ -137,6 +160,54 @@ class Settings(BaseSettings):
     # effect when oauth_connectors_enabled is on.
     allow_fixture_connectors: bool = True
 
+    # --- §6.C phishing URL threat intelligence -------------------------------
+    # PhishTank. The checkurl API is free; an application key is optional but
+    # raises the throughput available to un-keyed callers.
+    phishtank_enabled: bool = True
+    phishtank_api_key: str = ""
+    phishtank_base_url: str = "https://checkurl.phishtank.com/checkurl/"
+    phishtank_timeout_seconds: float = 10.0
+    phishtank_requests_per_hour: int = 60
+    # URLhaus needs a (free) auth key by policy, so it is opt-in.
+    urlhaus_enabled: bool = False
+    urlhaus_api_key: str = ""
+    urlhaus_base_url: str = "https://urlhaus-api.abuse.ch/v1/url/"
+    urlhaus_timeout_seconds: float = 10.0
+    urlhaus_requests_per_hour: int = 25
+    # Inbound cap on the phishing/URL analysis endpoint.
+    phishing_analyze_rate_limit_per_minute: int = 20
+
+    # --- §7.D domain posture --------------------------------------------------
+    # DNS is read over DoH (JSON) so every resolved address is visible to CRIX
+    # before any connection is attempted: this is what makes the private-IP
+    # SSRF revalidation testable and deterministic. No API key.
+    domain_checks_enabled: bool = True
+    domain_doh_url: str = "https://dns.google/resolve"
+    domain_doh_timeout_seconds: float = 8.0
+    domain_check_rate_limit_per_minute: int = 10
+    # How long after registration/refresh the TXT ownership token stays valid.
+    domain_ownership_token_ttl_minutes: int = 24 * 60
+
+    # --- §8.E repository secret scanning --------------------------------------
+    repo_scan_enabled: bool = True
+    repo_scan_rate_limit_per_minute: int = 5
+    repo_scan_max_archive_bytes: int = 20 * 1024 * 1024
+    repo_scan_max_file_count: int = 2000
+    repo_scan_max_file_bytes: int = 2 * 1024 * 1024
+    repo_scan_max_total_bytes: int = 8 * 1024 * 1024
+    repo_scan_max_scan_seconds: float = 30.0
+    repo_scan_max_findings: int = 200
+
+    # --- §9.F access audit ------------------------------------------------
+    # An access record that has not been reviewed for this long shows up as a
+    # stale-review candidate (documented interval, admin-adjustable per org later).
+    access_review_interval_days: int = 90
+
+    # --- Real-accounts mandate: email ownership verification ------------------
+    email_verification_token_ttl_minutes: int = 60 * 24
+    email_send_rate_limit_per_hour: int = 10
+    email_verify_rate_limit_per_hour: int = 20
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
@@ -171,25 +242,60 @@ class Settings(BaseSettings):
                 )
             if "*" in self.cors_origins:
                 raise RuntimeError("CORS wildcard is not allowed in production.")
+            if not self.cors_origins:
+                raise RuntimeError("CRIX_CORS_ORIGINS must name the public frontend origin.")
+            for origin in self.cors_origins:
+                if not _is_exact_https_origin(origin):
+                    raise RuntimeError(
+                        "Every CRIX_CORS_ORIGINS value must be an exact HTTPS origin in production."
+                    )
+            if not self.database_url.startswith("postgresql+psycopg://"):
+                raise RuntimeError(
+                    "CRIX_DATABASE_URL must use the PostgreSQL psycopg URL "
+                    "(postgresql+psycopg://...) in production."
+                )
+            sslmode = parse_qs(urlparse(self.database_url).query).get("sslmode", [""])[0].lower()
+            if sslmode not in {"require", "verify-ca", "verify-full"}:
+                raise RuntimeError(
+                    "CRIX_DATABASE_URL must require TLS (sslmode=require or stronger) in production."
+                )
+            if not self.trust_proxy_headers:
+                raise RuntimeError(
+                    "CRIX_TRUST_PROXY_HEADERS must be true behind the production reverse proxy."
+                )
             if not self.token_encryption_key:
                 raise RuntimeError(
                     "CRIX_TOKEN_ENCRYPTION_KEY must be set in production (Fernet key)."
                 )
+            try:
+                from cryptography.fernet import Fernet
+
+                Fernet(self.token_encryption_key.encode("utf-8"))
+            except (ImportError, ValueError, TypeError) as exc:
+                raise RuntimeError(
+                    "CRIX_TOKEN_ENCRYPTION_KEY must be a valid Fernet key in production."
+                ) from exc
             if not self.smtp_host:
                 raise RuntimeError(
                     "CRIX_SMTP_HOST must be set in production: password reset and "
                     "invitations are unusable without it."
                 )
-            if self.public_base_url.startswith("http://localhost"):
+            if not self.smtp_user or not self.smtp_password:
                 raise RuntimeError(
-                    "CRIX_PUBLIC_BASE_URL must be a real public URL in production; "
+                    "CRIX_SMTP_USER and CRIX_SMTP_PASSWORD must be set in production."
+                )
+            if not _is_exact_https_origin(self.public_base_url):
+                raise RuntimeError(
+                    "CRIX_PUBLIC_BASE_URL must be an exact HTTPS public origin in production; "
                     "emailed reset/invite links would be dead."
                 )
-            if self.oauth_connectors_enabled and not (
-                self.google_client_id or self.linkedin_client_id
-            ):
-                # Not fatal: the product runs without OAuth. Surfaced so ops knows.
-                pass
+            # CRIX-SMB intentionally has no inbox/OAuth integration. Refuse to
+            # run a public deployment that accidentally re-enables dormant
+            # connector code or its local fixture path.
+            if self.oauth_connectors_enabled:
+                raise RuntimeError("OAuth connectors are out of scope for CRIX-SMB production.")
+            if self.allow_fixture_connectors:
+                raise RuntimeError("Fixture connectors must be disabled in production.")
 
     def oauth_client_secret(self, provider: str) -> str:
         return {

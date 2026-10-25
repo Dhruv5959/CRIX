@@ -30,15 +30,16 @@ from sqlalchemy import select
 
 from app.engine import entities, normalizer
 from app.engine.normalizer import OrgScopeError
-from app.models import Membership, SecurityEvent
+from app.models import Membership, SecurityEvent, User
 from app.schemas import SecurityEventSchema
 from tests.conftest import register_org_admin
 from tests.helpers import ev
 from tests.xon_stubs import FakeResponse, patch_transport
 
 ACCOUNT = "phase2-account"
-# ``example.com`` is already used across the suite, so EmailStr accepts it.
-WORK_EMAIL = "alice@example.com"
+# This is the registered employee mailbox created by ``auth_headers``. Manual
+# breach checks are intentionally restricted to this verified, consented target.
+WORK_EMAIL = "user@example.com"
 
 
 def _schema(**overrides) -> SecurityEventSchema:
@@ -82,7 +83,7 @@ def _connect_account(client, headers, account_id=ACCOUNT, email=WORK_EMAIL):
     return response
 
 
-def _run_breach(client, headers, account_id=ACCOUNT, email=WORK_EMAIL):
+def _run_breach(client, headers, account_id="registered-email", email=WORK_EMAIL):
     return client.post(
         "/api/signals/breach",
         headers=headers,
@@ -93,6 +94,15 @@ def _run_breach(client, headers, account_id=ACCOUNT, email=WORK_EMAIL):
 def _breach_event(response) -> dict:
     events = response.json()["events"]
     return next(e for e in events if e["event_type"] == "BREACH_EXPOSURE")
+
+
+def _enable_registered_email_monitoring(db, client, headers) -> None:
+    """Prepare the affirmative-consent gate without consuming provider quota."""
+    user = db.get(User, _me(client, headers))
+    assert user is not None
+    user.email_verified = True
+    user.breach_monitor_consent = True
+    db.commit()
 
 
 # --------------------------------------------------------------------------- #
@@ -287,6 +297,7 @@ def test_a_finding_never_binds_to_another_organizations_asset(
     ).status_code == 201
 
     _connect_account(client, auth_headers)
+    _enable_registered_email_monitoring(db_session, client, auth_headers)
     patch_transport(monkeypatch, FakeResponse(200, {"breaches": [["Adobe"]]}))
     event = _breach_event(_run_breach(client, auth_headers))
 
@@ -303,6 +314,7 @@ def test_a_finding_binds_to_the_matching_asset_in_the_same_organization(
         json={"asset_id": WORK_EMAIL, "asset_type": "WORK_EMAIL", "label": "Alice work address"},
     ).status_code == 201
     _connect_account(client, auth_headers)
+    _enable_registered_email_monitoring(db_session, client, auth_headers)
 
     patch_transport(monkeypatch, FakeResponse(200, {"breaches": [["Adobe"]]}))
     event = _breach_event(_run_breach(client, auth_headers))
@@ -319,13 +331,13 @@ def test_a_mail_account_is_not_the_service_domain(
     assert client.post(
         "/api/assets",
         headers=auth_headers,
-        json={"asset_id": "gmail.com", "asset_type": "DOMAIN", "label": "Google domain"},
+        json={"asset_id": "example.com", "asset_type": "DOMAIN", "label": "Example domain"},
     ).status_code == 201
-    _connect_account(client, auth_headers, account_id="gmail-person", email="alice@gmail.com")
+    _connect_account(client, auth_headers, account_id="work-person", email=WORK_EMAIL)
+    _enable_registered_email_monitoring(db_session, client, auth_headers)
 
     patch_transport(monkeypatch, FakeResponse(200, {"breaches": [["Adobe"]]}))
-    event = _breach_event(_run_breach(client, auth_headers, account_id="gmail-person",
-                                      email="alice@gmail.com"))
+    event = _breach_event(_run_breach(client, auth_headers))
     assert event["asset_id"] is None  # not the domain asset
 
 
@@ -333,9 +345,10 @@ def test_a_mail_account_is_not_the_service_domain(
 # §2 — honest labeling: live, fixture, unavailable
 # --------------------------------------------------------------------------- #
 def test_live_provider_answer_keeps_the_real_label_and_its_evidence(
-    client, auth_headers, monkeypatch
+    client, auth_headers, db_session, monkeypatch
 ):
     _connect_account(client, auth_headers)
+    _enable_registered_email_monitoring(db_session, client, auth_headers)
     patch_transport(monkeypatch, FakeResponse(200, {"breaches": [["Adobe"]]}))
     event = _breach_event(_run_breach(client, auth_headers))
 
@@ -347,9 +360,10 @@ def test_live_provider_answer_keeps_the_real_label_and_its_evidence(
 
 
 def test_provider_failure_stays_unavailable_and_says_why(
-    client, auth_headers, monkeypatch
+    client, auth_headers, db_session, monkeypatch
 ):
     _connect_account(client, auth_headers)
+    _enable_registered_email_monitoring(db_session, client, auth_headers)
     patch_transport(monkeypatch, FakeResponse(503, {}))
     event = _breach_event(_run_breach(client, auth_headers))
 
@@ -360,8 +374,9 @@ def test_provider_failure_stays_unavailable_and_says_why(
     assert event["evidence"]["reason"]
 
 
-def test_provider_without_dates_does_not_invent_them(client, auth_headers, monkeypatch):
+def test_provider_without_dates_does_not_invent_them(client, auth_headers, db_session, monkeypatch):
     _connect_account(client, auth_headers)
+    _enable_registered_email_monitoring(db_session, client, auth_headers)
     patch_transport(monkeypatch, FakeResponse(200, {"breaches": [["Adobe"]]}))
     event = _breach_event(_run_breach(client, auth_headers))
 
@@ -457,9 +472,10 @@ def test_rechecking_a_module_does_not_duplicate_findings(
 
 
 def test_events_endpoint_exposes_the_standardized_finding(
-    client, auth_headers, monkeypatch
+    client, auth_headers, db_session, monkeypatch
 ):
     _connect_account(client, auth_headers)
+    _enable_registered_email_monitoring(db_session, client, auth_headers)
     patch_transport(monkeypatch, FakeResponse(200, {"breaches": [["Adobe"]]}))
     _run_breach(client, auth_headers)
 

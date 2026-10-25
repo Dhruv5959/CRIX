@@ -5,10 +5,19 @@
 import type {
   Account,
   AccountRelationship,
+  AccessCandidatesResult,
+  AccessRecordRow,
   AdminView,
   AnalysisResult,
   AssetDependency,
   BreachMonitorStatus,
+  DomainChecksResult,
+  EmailVerifyConfirmResult,
+  EmailVerifyRequestResult,
+  DomainListEntry,
+  DomainOwnership,
+  DomainRegistrationResult,
+  RepoScanResult,
   EvaluationSummary,
   Explanation,
   GraphPayload,
@@ -62,7 +71,7 @@ async function request<T>(
   options: RequestInit & { auth?: boolean; csrf?: boolean } = {},
 ): Promise<T> {
   const headers = new Headers(options.headers || {});
-  if (!headers.has("Content-Type") && options.body) {
+  if (!headers.has("Content-Type") && options.body && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
   if (options.auth !== false && accessToken) {
@@ -151,7 +160,7 @@ export const api = {
     simulated_exposure_type?: string | null;
     simulated_mfa_bypass_capable?: boolean;
   }) =>
-    request<{ events: SecurityEvent[] }>("/api/signals/breach", {
+    request<{ events: SecurityEvent[]; cached: boolean }>("/api/signals/breach", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
@@ -171,18 +180,75 @@ export const api = {
     }),
   providers: () =>
     request<{ providers: Array<Record<string, unknown>>; provenance: string }>("/api/providers"),
-  analyzePhishing: (text: string) =>
+  analyzePhishing: (text: string, url = "") =>
     request<PhishingResult>("/api/signals/phishing/analyze", {
       method: "POST",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, url }),
     }),
   phishingStatus: () =>
     request<{ artifacts_available: boolean; note: string }>("/api/signals/phishing/status"),
-  recordPhishing: (accountId: string, text: string) =>
+  recordPhishing: (accountId: string, text: string, url = "") =>
     request<{ result: PhishingResult; events: SecurityEvent[] }>(
       `/api/signals/phishing/${accountId}/record`,
-      { method: "POST", body: JSON.stringify({ text }) },
+      { method: "POST", body: JSON.stringify({ text, url }) },
     ),
+  // --- §7.D domain posture (admin-only) -------------------------------------
+  registerDomain: (domain: string, label: string) =>
+    request<DomainRegistrationResult>("/api/domains/register", {
+      method: "POST",
+      body: JSON.stringify({ domain, label }),
+    }),
+  listDomains: () =>
+    request<{ domains: DomainListEntry[]; count: number }>("/api/domains"),
+  verifyDomainOwnership: (assetId: string, token: string) =>
+    request<{ verified: boolean; reason: string; ownership?: DomainOwnership }>(
+      `/api/domains/${encodeURIComponent(assetId)}/ownership/verify`,
+      { method: "POST", body: JSON.stringify({ token }) },
+    ),
+  refreshDomainOwnership: (assetId: string) =>
+    request<DomainRegistrationResult>(
+      `/api/domains/${encodeURIComponent(assetId)}/ownership/refresh`,
+      { method: "POST" },
+    ),
+  runDomainChecks: (assetId: string, dkimSelector: string | null) =>
+    request<DomainChecksResult>(`/api/domains/${encodeURIComponent(assetId)}/checks`, {
+      method: "POST",
+      body: JSON.stringify({ dkim_selector: dkimSelector }),
+    }),
+  // --- §8.E repository secret scan (multipart upload; no form body JSON) -----
+  scanRepository: (assetId: string, file: File) => {
+    const form = new FormData();
+    form.append("asset_id", assetId);
+    form.append("file", file, file.name || "repo.zip");
+    return request<RepoScanResult>("/api/repo-scan", { method: "POST", body: form });
+  },
+  // --- §9.F access review (admin declares; members see own rows) --------------
+  listAccessRecords: () =>
+    request<{ count: number; scope: string; records: AccessRecordRow[] }>("/api/access/records"),
+  createAccessRecord: (membershipId: string, assetId: string, level: string) =>
+    request<AccessRecordRow>("/api/access/records", {
+      method: "POST",
+      body: JSON.stringify({ membership_id: membershipId, asset_id: assetId, level }),
+    }),
+  // --- registered-email verification (consent gate; token via email only) -----
+  requestEmailVerification: () =>
+    request<EmailVerifyRequestResult>("/api/auth/email/verify/request", { method: "POST" }),
+  confirmEmailVerification: (token: string) =>
+    request<EmailVerifyConfirmResult>("/api/auth/email/verify/confirm", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+  removeAccessRecord: (recordId: string) =>
+    request<{ id: string; status: string; removed_at: string }>(
+      `/api/access/records/${encodeURIComponent(recordId)}`,
+      { method: "DELETE" },
+    ),
+  reviewAccessRecord: (recordId: string) =>
+    request<{ id: string; status: string; last_reviewed_at: string }>(
+      `/api/access/records/${encodeURIComponent(recordId)}/review`,
+      { method: "POST" },
+    ),
+  accessCandidates: () => request<AccessCandidatesResult>("/api/access/candidates"),
   permissionAudit: (payload: Record<string, unknown>) =>
     request<{ classification_report: unknown[]; events: SecurityEvent[] }>(
       "/api/signals/permissions/audit",

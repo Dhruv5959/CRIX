@@ -8,10 +8,12 @@ from app import __version__
 from app.config import get_settings
 from app.routers import (
     accounts,
+    access,
     analysis,
     assets,
     auth,
     breach,
+    domains,
     graph,
     health,
     knowledge,
@@ -24,6 +26,7 @@ from app.routers import (
     propagation,
     relationships,
     remediation,
+    repo_scan,
 )
 
 settings = get_settings()
@@ -83,11 +86,14 @@ for router in (
     auth.router,
     org.router,
     assets.router,
+    domains.router,
     accounts.router,
     breach.router,
     password_check.router,
     phishing.router,
     permissions.router,
+    repo_scan.router,
+    access.router,
     analysis.router,
     graph.router,
     planner.router,

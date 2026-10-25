@@ -23,6 +23,10 @@ from app.config import Settings
 _OUTBOX = Path(__file__).resolve().parents[2] / "artifacts" / "outbox"
 
 
+class EmailDeliveryError(RuntimeError):
+    """A non-sensitive, caller-safe SMTP delivery failure."""
+
+
 def _build_message(*, to: str, subject: str, body: str, settings: Settings) -> EmailMessage:
     message = EmailMessage()
     message["From"] = settings.email_from
@@ -40,12 +44,17 @@ def send_email(*, to: str, subject: str, body: str, settings: Settings) -> str:
     if settings.smtp_host:
         # Explicitly configured SMTP wins in every environment (dev too), so
         # production behavior can be exercised locally before the real deploy.
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as server:
-            if settings.smtp_start_tls:
-                server.starttls()
-            if settings.smtp_user:
-                server.login(settings.smtp_user, settings.smtp_password)
-            server.send_message(message)
+        try:
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as server:
+                if settings.smtp_start_tls:
+                    server.starttls()
+                if settings.smtp_user:
+                    server.login(settings.smtp_user, settings.smtp_password)
+                server.send_message(message)
+        except (OSError, smtplib.SMTPException) as exc:
+            # Provider error bodies can echo recipients and configuration.
+            # Keep them out of API responses and audit details.
+            raise EmailDeliveryError("Email delivery is temporarily unavailable.") from exc
         return "smtp"
 
     if settings.is_production:

@@ -35,6 +35,8 @@ backend/artifacts/*.eml
 
 # Logs
 *.log
+# One-off local pytest transcripts can include request/session diagnostics.
+backend/*_run.txt
 
 # Local agent/tooling runtime and vendored third-party checkouts
 .opencode/

@@ -23,13 +23,19 @@ from app.db import Base, get_db
 from app.main import app
 from app.rate_limit import (
     breach_check_limiter,
+    domain_check_limiter,
+    email_send_limiter,
+    email_verify_limiter,
     invite_accept_limiter,
     login_limiter,
     password_check_limiter,
     password_reset_limiter,
+    phishing_analyze_limiter,
     register_limiter,
+    repo_scan_limiter,
 )
 from app.signals import xposedornot
+from app.signals.url_intel import reset_provider_state as reset_url_intel_state
 from app.signals.xposedornot import reset_provider_state
 
 # Default is in-memory SQLite; a postgresql:// URL switches the whole suite.
@@ -64,26 +70,26 @@ TEST_SETTINGS = Settings(
 
 @pytest.fixture(autouse=True)
 def _forbid_live_provider(monkeypatch):
-    """Network safety net: no test may contact a real breach provider.
+    """Network safety net: no test may contact a real provider, via GET or POST.
 
-    The free tier is tiny (25 lookups/hour/IP) and a suite must never depend on
-    the public internet, so the client's HTTP transport is swapped for one that
-    fails loudly. Tests that want a specific response override it with
-    ``tests.xon_stubs.patch_transport``.
+    The free tiers are tiny and a suite must never depend on the public
+    internet, so the clients' HTTP transports are swapped for one that fails
+    loudly. Tests that want a specific response override it with stub helpers
+    (``tests.xon_stubs.patch_transport`` for GET, per-feature stubs for POST).
     """
 
     def _forbidden(url, **_kwargs):
         raise httpx.ConnectError(f"tests must not contact the network: {url}")
 
+    # httpx is a module-wide singleton here: patching .get/.post on it covers
+    # every client module at once (xposedornot, hibp, phishing feed URLs, DNS).
     monkeypatch.setattr(xposedornot.httpx, "get", _forbidden)
-    # The Pwned Passwords client is network-backed too (register/login now run
-    # k-anonymity checks server-side); the whole suite stays hermetic.
-    from app.signals import hibp as hibp_module
-
-    monkeypatch.setattr(hibp_module.httpx, "get", _forbidden)
+    monkeypatch.setattr(xposedornot.httpx, "post", _forbidden)
     reset_provider_state()
+    reset_url_intel_state()
     yield
     reset_provider_state()
+    reset_url_intel_state()
 
 
 @pytest.fixture()
@@ -132,6 +138,11 @@ def client(db_session):
         register_limiter,
         password_reset_limiter,
         invite_accept_limiter,
+        phishing_analyze_limiter,
+        domain_check_limiter,
+        repo_scan_limiter,
+        email_send_limiter,
+        email_verify_limiter,
     ):
         limiter.reset()
     with TestClient(app) as test_client:

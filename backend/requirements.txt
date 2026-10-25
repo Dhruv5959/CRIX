@@ -23,11 +23,9 @@ PyYAML==6.0.3
 # startup with ImportError even though the venv happened to have it.
 cryptography==50.0.2
 
-# PostgreSQL driver. SQLite stays the default for local dev and tests; setting
-# CRIX_DATABASE_URL to a postgresql:// URL (see docker-compose.yml) enables the
-# full-stack path. Not required to run the app. Left unpinned: NOT installed in
-# this project's venv (never verified here), so no tested version exists to pin.
-psycopg[binary]>=3.2
+# PostgreSQL driver. SQLite stays the default for local dev and tests; Render
+# uses this driver with Supabase's TLS session pooler in production.
+psycopg[binary]==3.3.6
 
 # Dev / test
 pytest==9.1.1

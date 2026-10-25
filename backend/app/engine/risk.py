@@ -105,6 +105,21 @@ EVENT_TO_FEATURE = {
     "PUSH_BOMBING_REPORTED": "push_bombing",
     "PHISHING_MESSAGE_DETECTED": "phishing",
     "AI_GENERATED_MESSAGE_DETECTED": "phishing",
+    # Feature C: a live threat feed flagged a submitted URL. It feeds the
+    # EXISTING phishing feature pool (max-severity aggregation), so no new
+    # weight, interaction, or formula version appears here — documented in
+    # docs/RISK_MODEL.md and regression-tested in test_risk_regression (§6.C).
+    "PHISHING_URL_DETECTED": "phishing",
+    # Feature F: organization-wide access records are used hygiene evidence;
+    # they feed the EXISTING permissions pool for the same reason.
+    "ACCESS_REVIEW_NEEDED": "permissions",
+    # Feature D findings are persisted and correlated elsewhere but
+    # intentionally NOT in the feature map: DNS/TLS posture is a
+    # company-domain property, not an account-breach observation, and mapping
+    # it into an existing pool would be an undocumented model change.
+    # Declarative matching rules may still combine them with mapped event
+    # types (narrowly, with tests).
+    # EMAIL_AUTH_WEAKNESS / TLS_POSTURE_WEAK: deliberately unmapped.
     "RISKY_PERMISSION_GRANTED": "permissions",
     "STALE_PERMISSION_GRANTED": "permissions",
     "ACCOUNT_DEPENDENCY": "dependency",

@@ -18,7 +18,21 @@ def _make_engine(url: str):
     if url.startswith("sqlite"):
         # Allow use across FastAPI's threadpool.
         connect_args = {"check_same_thread": False}
-    return create_engine(url, connect_args=connect_args, future=True)
+        return create_engine(url, connect_args=connect_args, future=True)
+
+    settings = get_settings()
+    # A Render web service is a persistent process. Keep a bounded SQLAlchemy
+    # pool, validate a connection before each checkout, and recycle old
+    # connections so stale Supabase-pooler sockets do not surface as 500s.
+    return create_engine(
+        url,
+        future=True,
+        pool_pre_ping=True,
+        pool_size=settings.database_pool_size,
+        max_overflow=settings.database_max_overflow,
+        pool_timeout=settings.database_pool_timeout_seconds,
+        pool_recycle=settings.database_pool_recycle_seconds,
+    )
 
 
 _engine = _make_engine(get_settings().database_url)

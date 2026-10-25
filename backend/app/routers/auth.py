@@ -15,7 +15,7 @@ import hashlib
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -23,16 +23,29 @@ from app import audit, security, totp
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.deps import get_current_user
-from app.models import Membership, PasswordResetToken, RefreshToken, User
+from app.models import (
+    EmailVerificationToken,
+    Membership,
+    PasswordResetToken,
+    RefreshToken,
+    User,
+)
 from app.rate_limit import (
     client_ip,
+    email_send_limiter,
+    email_verify_limiter,
     enforce,
+    enforce_key,
     login_limiter,
     password_reset_limiter,
     register_limiter,
 )
 from app.routers.accounts import ensure_registered_email_account
-from app.routers.breach import is_breach_check_stale, run_registered_email_check
+from app.routers.breach import (
+    consent_can_run,
+    is_breach_check_stale,
+    run_registered_email_check,
+)
 from app.routers.org import create_organization
 from app.schemas import (
     LoginRequest,
@@ -43,7 +56,7 @@ from app.schemas import (
     TokenResponse,
     UserResponse,
 )
-from app.services.email import send_email
+from app.services.email import EmailDeliveryError, send_email
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -258,7 +271,7 @@ def login(
     # account on first login; consented users get a stale (>24h) breach check.
     ensure_registered_email_account(db, user)
     try:
-        if user.breach_monitor_consent and is_breach_check_stale(user):
+        if consent_can_run(user) and is_breach_check_stale(user):
             run_registered_email_check(db, user, settings)
     except Exception:
         # A provider outage must never prevent authentication.
@@ -396,21 +409,38 @@ def password_reset_request(
             )
         ):
             stale.used_at = now
-        db.add(
-            PasswordResetToken(
-                user_id=user.id,
-                token_hash=_hash_token(raw),
-                expires_at=now + dt.timedelta(minutes=RESET_TOKEN_TTL_MINUTES),
-            )
+        reset_row = PasswordResetToken(
+            user_id=user.id,
+            token_hash=_hash_token(raw),
+            expires_at=now + dt.timedelta(minutes=RESET_TOKEN_TTL_MINUTES),
         )
+        db.add(reset_row)
         db.commit()
         link = f"{settings.public_base_url}/reset-password?token={raw}"
-        transport = send_email(
-            to=user.email,
-            subject="Reset your CRIX password",
-            body=f"Use this link within {RESET_TOKEN_TTL_MINUTES} minutes:\n\n{link}\n",
-            settings=settings,
-        )
+        try:
+            transport = send_email(
+                to=user.email,
+                subject="Reset your CRIX password",
+                body=f"Use this link within {RESET_TOKEN_TTL_MINUTES} minutes:\n\n{link}\n",
+                settings=settings,
+            )
+        except EmailDeliveryError:
+            # The link was not delivered, so consume its stored hash rather
+            # than leave a usable token for an email that was never sent.
+            reset_row.used_at = now
+            db.commit()
+            audit.record(
+                db,
+                action="password_reset.delivery_unavailable",
+                user_id=user.id,
+                ip_address=client_ip(request),
+            )
+            return {
+                "detail": (
+                    "If that email exists, a reset link will be sent when email delivery "
+                    "is available."
+                )
+            }
         # Audit records the transport only; the token is never logged (§14).
         audit.record(
             db, action="password_reset.requested", user_id=user.id,
@@ -444,6 +474,140 @@ def password_reset_confirm(
     _revoke_all_user_tokens(db, user.id)
     audit.record(db, action="password_reset.completed", user_id=user.id, ip_address=client_ip(request))
     return {"detail": "Password has been reset. Please log in again."}
+
+
+# --------------------------------------------------------------------------- #
+# Registered-email verification (real-accounts mandate; consent gate for auto
+# breach monitoring). Request/confirm mirrors the password-reset pattern:
+# only the SHA-256 hash is stored, the raw token exists in the outbound email
+# only (never in a response, never logged), single-use, expiring, and a new
+# request replaces any still-pending token for the user.
+# --------------------------------------------------------------------------- #
+class EmailVerifyConfirm(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+
+
+@router.post("/email/verify/request", status_code=status.HTTP_200_OK)
+def request_email_verification(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    if current_user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This email address is already verified.",
+        )
+    enforce_key(
+        email_send_limiter,
+        f"user:{current_user.id}",
+        limit=settings.email_send_rate_limit_per_hour,
+    )
+    now = dt.datetime.now(dt.timezone.utc)
+    # Replace pending tokens: an inbox should never face two live challenges.
+    for stale_row in db.scalars(
+        select(EmailVerificationToken).where(
+            EmailVerificationToken.user_id == current_user.id,
+            EmailVerificationToken.used_at.is_(None),
+        )
+    ).all():
+        db.delete(stale_row)
+    expires_at = now + dt.timedelta(minutes=settings.email_verification_token_ttl_minutes)
+    raw = security.new_refresh_token()
+    verification_row = EmailVerificationToken(
+        user_id=current_user.id,
+        token_hash=_hash_token(raw),
+        expires_at=expires_at,
+    )
+    db.add(verification_row)
+    db.commit()
+    link = f"{settings.public_base_url}/verify-email?token={raw}"
+    try:
+        transport = send_email(
+            to=current_user.email,
+            subject="Verify your work email on CRIX",
+            body=(
+                "Confirm this address to enable automatic breach monitoring and "
+                f"startup remediation checks:\n\n{link}\n\n"
+                f"The link expires in {settings.email_verification_token_ttl_minutes} minutes.\n"
+            ),
+            settings=settings,
+        )
+    except EmailDeliveryError as exc:
+        # Unlike password reset, this endpoint is authenticated: returning an
+        # honest 503 does not create an account-enumeration oracle. Consume the
+        # undelivered challenge so only a link that reached the mailbox works.
+        verification_row.used_at = now
+        db.commit()
+        audit.record(
+            db,
+            action="email_verification.delivery_unavailable",
+            user_id=current_user.id,
+            ip_address=client_ip(request),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Verification email could not be delivered. Please retry shortly.",
+        ) from exc
+    # Audit records the transport only; the token is never logged (§14).
+    audit.record(
+        db, action="email_verification.requested", user_id=current_user.id,
+        ip_address=client_ip(request),
+        detail={"transport": transport, "expires_at": expires_at.isoformat()},
+    )
+    return {
+        "sent_to": current_user.email,
+        "transport": transport,
+        "expires_at": expires_at.isoformat(),
+        "note": (
+            "The verification token is delivered by email only; it is never "
+            "returned by any API response."
+        ),
+    }
+
+
+@router.post("/email/verify/confirm", status_code=status.HTTP_200_OK)
+def confirm_email_verification(
+    payload: EmailVerifyConfirm,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    enforce(
+        email_verify_limiter,
+        request,
+        limit=settings.email_verify_rate_limit_per_hour,
+    )
+    row = db.scalar(
+        select(EmailVerificationToken).where(
+            EmailVerificationToken.token_hash == _hash_token(payload.token)
+        )
+    )
+    now = dt.datetime.now(dt.timezone.utc)
+    if row is None or row.used_at is not None or _as_utc(row.expires_at) <= now:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid, used, or expired verification token — request a new one.",
+        )
+    user = db.get(User, row.user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid, used, or expired verification token — request a new one.",
+        )
+    row.used_at = now  # single-use
+    user.email_verified = True
+    db.commit()
+    audit.record(
+        db, action="email_verification.completed", user_id=user.id,
+        ip_address=client_ip(request), detail={"email_domain": user.email.rpartition("@")[2]},
+    )
+    return {
+        "verified": "true",
+        "email": user.email,
+        "note": "This address can now gate automatic breach monitoring.",
+    }
 
 
 # --------------------------------------------------------------------------- #

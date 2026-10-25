@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from app.models import ConnectedSignal
+from app.models import ConnectedSignal, User
 from tests.conftest import register_and_login
 
 SELF_ACCOUNT_ID = "registered-email"
@@ -61,11 +61,16 @@ def test_registered_email_account_is_deletable_but_restored_on_login(client):
     assert rows[0]["account_id"] == SELF_ACCOUNT_ID
 
 
-def test_breach_check_runs_against_the_registered_email_account(client):
+def test_breach_check_runs_against_the_registered_email_account(client, db_session):
     """The self account is a real target for signal runs (offline: provider
     lookup fails loudly as UNAVAILABLE — never fabricated SAFE results)."""
     admin = register_and_login(client, email="self-d@example.com")
     headers = {"Authorization": f"Bearer {admin['access_token']}"}
+    user = db_session.scalar(select(User).where(User.email == "self-d@example.com"))
+    assert user is not None
+    user.email_verified = True
+    user.breach_monitor_consent = True
+    db_session.commit()
     resp = client.post(
         "/api/signals/breach",
         headers=headers,

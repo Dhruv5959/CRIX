@@ -27,6 +27,19 @@ AI_GENERATED_MESSAGE_DETECTED = "AI_GENERATED_MESSAGE_DETECTED"
 RISKY_PERMISSION_GRANTED = "RISKY_PERMISSION_GRANTED"
 STALE_PERMISSION_GRANTED = "STALE_PERMISSION_GRANTED"
 
+# --- Feature C (§6): employee-submitted URLs judged by live threat feeds ---
+PHISHING_URL_DETECTED = "PHISHING_URL_DETECTED"
+
+# --- Feature D (§7): company domain / email-auth posture -------------------
+EMAIL_AUTH_WEAKNESS = "EMAIL_AUTH_WEAKNESS"
+TLS_POSTURE_WEAK = "TLS_POSTURE_WEAK"
+
+# --- Feature E (§8): pattern match in an uploaded repository archive -------
+SECRET_PATTERN_MATCHED = "SECRET_PATTERN_MATCHED"
+
+# --- Feature F (§9): organization-wide access-review candidates ------------
+ACCESS_REVIEW_NEEDED = "ACCESS_REVIEW_NEEDED"
+
 # --- graph-derived (Phase 7) ---
 ACCOUNT_DEPENDENCY = "ACCOUNT_DEPENDENCY"
 COMPROMISED_RECOVERY_ACCOUNT = "COMPROMISED_RECOVERY_ACCOUNT"

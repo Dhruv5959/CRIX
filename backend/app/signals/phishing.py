@@ -49,7 +49,16 @@ def _extract_signals(text: str) -> list[dict]:
         signals.append({"type": "credential_request", "detail": cred_hits, "weight": "high"})
     links = _URL_RE.findall(text)
     if links:
-        signals.append({"type": "embedded_links", "detail": links[:10], "weight": "medium"})
+        # Store the SKELETON of each link (host/path), never its query values.
+        # A phishing link commonly carries `?token=…` and those values must not
+        # leak into evidence (§3 redaction rules).
+        from app.signals.url_intel import redact_url
+
+        redacted_links = []
+        for link in links[:10]:
+            safe, _count = redact_url(link)
+            redacted_links.append(safe or link)
+        signals.append({"type": "embedded_links", "detail": redacted_links, "weight": "medium"})
     return signals
 
 

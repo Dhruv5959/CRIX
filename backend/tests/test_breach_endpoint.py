@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from sqlalchemy import select
 
+from app.models import User
 from app.signals.xposedornot import reset_provider_state
 from tests.xon_stubs import FakeResponse, patch_transport
 
-ACCOUNT = "breach-test-account"
-EMAIL = "person@example.com"
+ACCOUNT = "registered-email"
+EMAIL = "user@example.com"
 
 
 @pytest.fixture(autouse=True)
@@ -25,18 +27,13 @@ def _clean_provider_state():
 
 
 @pytest.fixture()
-def account(client, auth_headers):
-    created = client.post(
-        "/api/accounts",
-        headers=auth_headers,
-        json={
-            "account_id": ACCOUNT,
-            "label": "Primary Gmail",
-            "service_name": "Google",
-            "email": "owner@example.com",
-        },
-    )
-    assert created.status_code == 201, created.text
+def account(auth_headers, db_session):
+    """Breach lookups require the real registered-email consent gate."""
+    user = db_session.scalar(select(User).where(User.email == EMAIL))
+    assert user is not None
+    user.email_verified = True
+    user.breach_monitor_consent = True
+    db_session.commit()
     return ACCOUNT
 
 
@@ -151,10 +148,17 @@ def test_invalid_email_is_rejected_before_any_provider_call(client, auth_headers
 # --------------------------------------------------------------------------- #
 # Replace semantics + real/simulated separation
 # --------------------------------------------------------------------------- #
-def test_rechecking_replaces_the_previous_verdict(client, auth_headers, account, monkeypatch):
+def test_rechecking_replaces_the_previous_verdict(
+    client, auth_headers, account, db_session, monkeypatch
+):
     patch_transport(monkeypatch, FakeResponse(200, {"breaches": [["Adobe"]]}))
     assert breach_event(run_breach(client, auth_headers))["status"] == "FINDING"
 
+    # A fresh result is cached; expire it deliberately to exercise the next
+    # provider lookup and its replace semantics.
+    user = db_session.scalar(select(User).where(User.email == EMAIL))
+    user.last_breach_check_at = None
+    db_session.commit()
     patch_transport(monkeypatch, FakeResponse(200, {"Error": "Not found"}))
     assert breach_event(run_breach(client, auth_headers))["status"] == "CHECKED_SAFE"
 
@@ -191,3 +195,28 @@ def test_simulated_scenario_stays_labeled_and_separate(client, auth_headers, acc
     assert "SIMULATED" in simulated["provenance"]
     # The real lookup and the constructed scenario are distinct events.
     assert breach_event(response)["status"] == "CHECKED_SAFE"
+
+
+def test_arbitrary_address_is_rejected_without_contacting_the_provider(
+    client, auth_headers, account, monkeypatch
+):
+    calls = patch_transport(monkeypatch, FakeResponse(200, {"breaches": [["Adobe"]]}))
+    response = run_breach(client, auth_headers, email="other-person@example.com")
+
+    assert response.status_code == 403
+    assert calls == []
+
+
+def test_fresh_registered_result_is_served_from_cache(
+    client, auth_headers, account, monkeypatch
+):
+    calls = patch_transport(monkeypatch, FakeResponse(200, {"Error": "Not found"}))
+    first = run_breach(client, auth_headers)
+    assert first.status_code == 200
+    assert first.json()["cached"] is False
+    provider_calls = list(calls)
+
+    second = run_breach(client, auth_headers)
+    assert second.status_code == 200
+    assert second.json()["cached"] is True
+    assert calls == provider_calls

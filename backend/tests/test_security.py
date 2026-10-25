@@ -65,6 +65,20 @@ def test_range_endpoint_rejects_non_hex(client):
     assert client.get("/api/password-check/range/zzzzz").status_code == 422
 
 
+def test_malformed_password_range_response_is_unavailable(client, monkeypatch):
+    """A 200 HTML/error body cannot be interpreted as a password not found."""
+    import app.signals.hibp as hibp_module
+
+    class _Resp:
+        status_code = 200
+        text = "<html>upstream error</html>"
+
+    monkeypatch.setattr(hibp_module.httpx, "get", lambda *_args, **_kwargs: _Resp())
+    response = client.get("/api/password-check/range/ABCDE")
+    assert response.status_code == 503
+    assert "malformed" in response.json()["detail"].lower()
+
+
 def test_password_endpoint_schema_has_no_hash_fields():
     """The hygiene request schema must not carry a password or full hash."""
     from app.schemas import PasswordHygieneRequest, PasswordReuseItem
@@ -98,20 +112,24 @@ def test_idor_endpoint_matrix(client, auth_headers):
 # --------------------------------------------------------------------------- #
 # §14 [3] Client cannot inject/override risk or severity
 # --------------------------------------------------------------------------- #
-def test_client_cannot_inject_severity(client, auth_headers):
+def test_client_cannot_inject_severity(client, auth_headers, db_session):
     """Extra fields (like severity/score) sent by a client are ignored; the
     server computes authoritative values."""
-    client.post(
-        "/api/accounts",
-        json={"account_id": "inj", "label": "inj", "email": "inj@example.com"},
-        headers=auth_headers,
-    )
+    from sqlalchemy import select
+
+    from app.models import User
+
+    user = db_session.scalar(select(User).where(User.email == "user@example.com"))
+    assert user is not None
+    user.email_verified = True
+    user.breach_monitor_consent = True
+    db_session.commit()
     # Try to smuggle a severity into the breach check payload.
     resp = client.post(
         "/api/signals/breach",
         json={
-            "account_id": "inj",
-            "email": "inj@example.com",
+            "account_id": "registered-email",
+            "email": "user@example.com",
             "severity": 999.0,
             "score": 100,
             "status": "CHECKED_SAFE",
@@ -233,6 +251,14 @@ def test_cors_allows_configured_origin(client):
     assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
 
+def test_readiness_checks_the_database_connection(client, db_session, monkeypatch):
+    """The deploy health check must probe the DB, not merely report process up."""
+    monkeypatch.setattr("app.routers.health.get_engine", lambda: db_session.bind)
+    response = client.get("/api/ready")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
 # --------------------------------------------------------------------------- #
 # §14 [8] Secrets only in env; .env not committed; .env.example exists
 # --------------------------------------------------------------------------- #
@@ -325,3 +351,40 @@ def test_production_requires_secret():
     prod = Settings(env="production", jwt_secret="dev-only-insecure-change-me")
     with pytest.raises(RuntimeError):
         prod.assert_production_safe()
+
+
+def test_production_configuration_requires_postgres_tls_and_real_delivery():
+    """The deploy-time guard must reject the common unsafe production shape."""
+    from app.config import Settings
+
+    safe = dict(
+        env="production",
+        jwt_secret="test-production-secret-not-for-use-0123456789",
+        database_url="postgresql+psycopg://crix:password@pooler.example:5432/postgres?sslmode=require",
+        cors_origins=["https://app.example.com"],
+        public_base_url="https://app.example.com",
+        trust_proxy_headers=True,
+        token_encryption_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+        smtp_host="smtp.example.com",
+        smtp_user="smtp-user",
+        smtp_password="smtp-password",
+        oauth_connectors_enabled=False,
+        allow_fixture_connectors=False,
+    )
+    Settings(**safe).assert_production_safe()
+
+    unsafe = Settings(**{**safe, "database_url": "sqlite:///./crix.db"})
+    with pytest.raises(RuntimeError, match="PostgreSQL"):
+        unsafe.assert_production_safe()
+
+    unsafe = Settings(**{**safe, "allow_fixture_connectors": True})
+    with pytest.raises(RuntimeError, match="Fixture"):
+        unsafe.assert_production_safe()
+
+    unsafe = Settings(**{**safe, "token_encryption_key": "not-a-fernet-key"})
+    with pytest.raises(RuntimeError, match="valid Fernet"):
+        unsafe.assert_production_safe()
+
+    unsafe = Settings(**{**safe, "cors_origins": ["https://app.example.com/path"]})
+    with pytest.raises(RuntimeError, match="exact HTTPS origin"):
+        unsafe.assert_production_safe()

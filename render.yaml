@@ -1,0 +1,49 @@
+services:
+  - type: web
+    name: crix-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+    # This service must remain a single instance until the in-process rate
+    # limiters are replaced with shared storage. Both migration and reference
+    # seeding are idempotent and never create demo users or fixture records.
+    startCommand: alembic upgrade head && python scripts/seed_reference_data.py && uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"
+    healthCheckPath: /api/ready
+    autoDeploy: false
+    envVars:
+      # Keep the hosted runtime aligned with the locally verified dependency set
+      # instead of accepting Render's moving default Python version.
+      - key: PYTHON_VERSION
+        value: "3.13.7"
+      - key: CRIX_ENV
+        value: production
+      - key: CRIX_DATABASE_URL
+        sync: false
+      - key: CRIX_JWT_SECRET
+        sync: false
+      - key: CRIX_TOKEN_ENCRYPTION_KEY
+        sync: false
+      - key: CRIX_CORS_ORIGINS
+        sync: false
+      - key: CRIX_PUBLIC_BASE_URL
+        sync: false
+      - key: CRIX_SMTP_HOST
+        sync: false
+      - key: CRIX_SMTP_PORT
+        value: "587"
+      - key: CRIX_SMTP_USER
+        sync: false
+      - key: CRIX_SMTP_PASSWORD
+        sync: false
+      - key: CRIX_EMAIL_FROM
+        sync: false
+      - key: CRIX_SMTP_START_TLS
+        value: "true"
+      - key: CRIX_TRUST_PROXY_HEADERS
+        value: "true"
+      - key: CRIX_BREACH_EMAIL_PROVIDER
+        value: xposedornot
+      - key: CRIX_OAUTH_CONNECTORS_ENABLED
+        value: "false"
+      - key: CRIX_ALLOW_FIXTURE_CONNECTORS
+        value: "false"

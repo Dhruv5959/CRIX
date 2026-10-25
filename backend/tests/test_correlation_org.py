@@ -405,13 +405,62 @@ def test_no_rule_template_uses_an_unknown_placeholder():
             )
 
 
-def test_the_catalog_lists_the_three_phase3_rules():
+def test_the_catalog_lists_the_phase3_and_semester7_rules():
     ids = {r["rule_id"] for r in correlation.describe_rules()}
     assert {
         "company_asset_compound_exposure",
         "declared_dependency_exposure",
         "phishing_campaign_window",
+        "phished_weak_email_auth",
     } <= ids
+
+
+# --------------------------------------------------------------------------- #
+# Rule: phished_weak_email_auth (scope: same_asset, Semester-7 features C+D)
+# --------------------------------------------------------------------------- #
+def test_phished_weak_email_auth_rule_fires_on_one_asset_within_the_window():
+    now = dt.datetime.now(dt.timezone.utc)
+    events = [
+        ev("PHISHING_URL_DETECTED", asset_id=ASSET_A, event_id="evt_url", first_seen=now, last_seen=now),
+        ev("EMAIL_AUTH_WEAKNESS", asset_id=ASSET_A, event_id="evt_auth", first_seen=now, last_seen=now),
+    ]
+    result = _by_rule(events, "phished_weak_email_auth")
+    assert len(result) == 1
+    assert result[0].asset_ids == [ASSET_A]
+
+
+def test_phished_weak_email_auth_refuses_across_different_assets():
+    events = [
+        ev("PHISHING_URL_DETECTED", asset_id=ASSET_A, event_id="evt_url"),
+        ev("EMAIL_AUTH_WEAKNESS", asset_id=ASSET_B, event_id="evt_auth"),
+    ]
+    assert "phished_weak_email_auth" not in _rule_ids(events)
+
+
+def test_phished_weak_email_auth_refuses_without_asset_binding():
+    """An unbound URL finding can never be claimed against a domain asset."""
+    events = [
+        ev("PHISHING_URL_DETECTED", asset_id=None, event_id="evt_url"),
+        ev("EMAIL_AUTH_WEAKNESS", asset_id=ASSET_A, event_id="evt_auth"),
+    ]
+    assert "phished_weak_email_auth" not in _rule_ids(events)
+
+
+def test_phished_weak_email_auth_refuses_across_organizations():
+    events = [
+        ev("PHISHING_URL_DETECTED", asset_id=ASSET_A, event_id="evt_url", org_id="org_one"),
+        ev("EMAIL_AUTH_WEAKNESS", asset_id=ASSET_A, event_id="evt_auth", org_id="org_two"),
+    ]
+    assert "phished_weak_email_auth" not in _rule_ids(events)
+
+
+def test_phished_weak_email_auth_refuses_when_observations_are_too_far_apart():
+    eight_days = _days_ago(8)
+    events = [
+        ev("PHISHING_URL_DETECTED", asset_id=ASSET_A, event_id="evt_url", first_seen=eight_days),
+        ev("EMAIL_AUTH_WEAKNESS", asset_id=ASSET_A, event_id="evt_auth"),
+    ]
+    assert "phished_weak_email_auth" not in _rule_ids(events)
 
 
 def test_an_unknown_scope_fails_loudly():

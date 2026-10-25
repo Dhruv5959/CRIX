@@ -11,12 +11,25 @@ import hashlib
 import pytest
 
 from tests.conftest import register_and_login
+from tests.test_email_verification import _latest_verify_token
 from tests.xon_stubs import FakeResponse, patch_transport
 
 
 @pytest.fixture()
 def auth(client):
-    return register_and_login(client, email="ab@example.com")
+    """Registers, then proves control of the mailbox through the real
+    verification round-trip — the automatic-monitoring consent gate (§ real-
+    accounts mandate) requires a verified registered email."""
+    data = register_and_login(client, email="ab@example.com")
+    request = client.post(
+        "/api/auth/email/verify/request", headers=_headers(data), json={}
+    )
+    assert request.status_code == 200, request.text
+    token = _latest_verify_token("ab@example.com")
+    assert token, "the dev outbox must contain the verification link"
+    confirm = client.post("/api/auth/email/verify/confirm", json={"token": token})
+    assert confirm.status_code == 200, confirm.text
+    return data
 
 
 def _headers(data) -> dict:
@@ -43,7 +56,7 @@ def test_register_rejects_a_password_found_in_the_corpus(client, monkeypatch):
     """A matching suffix with count>0 blocks registration server-side with a
     clear, actionable message — not just a client-side hint."""
     password = "a-pwned-registration-password-99"
-    text = f"{_suffix_for(password)}:23\n00000AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:5"
+    text = f"{_suffix_for(password)}:23"
 
     def fake_range_get(url, **_kwargs):
         return _TextResponse(text)
@@ -91,7 +104,7 @@ def test_login_records_the_exposure_outcome_of_the_verified_password(client, mon
     assert me_before.json()["last_password_exposure"]["status"] == "UNAVAILABLE"
 
     password = "correct horse battery"
-    text = f"00000AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:5\n{_suffix_for(password)}:7"
+    text = f"{_suffix_for(password)}:7"
     monkeypatch.setattr("app.signals.hibp.httpx.get", lambda url, **kw: _TextResponse(text))
 
     login = client.post(
@@ -179,21 +192,13 @@ def test_login_auto_refreshes_only_when_consented_and_stale(
     assert email_calls(), "stale (>24h) stamp triggers the login-time auto-refresh"
 
 
-def test_placeholder_email_is_labeled_not_meaningful(client, auth, monkeypatch):
-    """The no-real-email case: any provider answer about a placeholder-style
-    address carries an explicit not-meaningful warning on every event."""
-    patch_transport(monkeypatch, FakeResponse(200, {"breaches": [["Adobe"]]}))
+def test_manual_breach_lookup_cannot_target_a_different_address(client, auth, monkeypatch):
+    """An authenticated employee cannot use CRIX as an arbitrary-email oracle."""
+    calls = patch_transport(monkeypatch, FakeResponse(200, {"breaches": [["Adobe"]]}))
     resp = client.post(
         "/api/signals/breach",
         headers=_headers(auth),
         json={"account_id": "registered-email", "email": "someone@example.com"},
     )
-    assert resp.status_code == 200, resp.text
-    labeled = [
-        e
-        for e in resp.json()["events"]
-        if e["event_type"] in {"BREACH_EXPOSURE", "IDENTITY_EXPOSED"}
-    ]
-    assert labeled  # events are still produced — the lookup really happened
-    for e in labeled:
-        assert "placeholder-style" in e["metadata"]["address_warning"]
+    assert resp.status_code == 403, resp.text
+    assert calls == []
