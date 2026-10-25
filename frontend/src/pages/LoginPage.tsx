@@ -1,8 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { ShieldHalf } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
+import { detectBreachedPassword } from "@/lib/password";
+import {
+  copyToClipboard,
+  parseBreachWarningCount,
+  passwordUsePlan,
+} from "@/lib/passwordGenerator";
+import { PasswordBreachWarning, PasswordGenerator } from "@/components/PasswordGenerator";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -20,8 +27,64 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Live k-anonymity verdict for the password being typed: the breach count
+  // when it is found, null in every other case (clean, empty, or unchecked —
+  // a provider failure never renders as an all-clear).
+  const [breachCount, setBreachCount] = useState<number | null>(null);
+  const [generatorOpen, setGeneratorOpen] = useState(false);
+
+  // Debounced client-side check of whatever is typed, reusing CRIX's existing
+  // checker + /api/password-check/range/{prefix}: SHA-1 locally, only the first
+  // five hash characters leave the browser. Never runs on the reset-request tab.
+  useEffect(() => {
+    if (mode === "forgot" || !password) {
+      setBreachCount(null);
+      return;
+    }
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      detectBreachedPassword(password, (prefix) => api.passwordRange(prefix)).then((found) => {
+        if (alive) setBreachCount(found ? found.count : null);
+      });
+    }, 1000);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [password, mode]);
 
   if (user) return <Navigate to="/" replace />;
+
+  /** Switching tabs drops mode-specific state: the warning and the open
+   * generator both describe the previous tab's password. */
+  function switchMode(next: "login" | "register" | "forgot") {
+    setMode(next);
+    setBreachCount(null);
+    setGeneratorOpen(false);
+  }
+
+  /** "Use this password": per-surface behavior from passwordUsePlan. Register
+   * fills the field and leaves the normal flow intact; login fills nothing and
+   * routes to the reset flow with the value copied, because a replacement
+   * password cannot authenticate until it is saved to the account. Never
+   * submits a form or changes an account. */
+  async function applyGenerated(generated: string) {
+    if (mode === "forgot") return;
+    const plan = passwordUsePlan(mode);
+    if (plan.copy) await copyToClipboard(generated);
+    if (plan.fillPassword) setPassword(generated);
+    if (plan.guideToReset) {
+      setMode("forgot");
+      setError(null);
+      setNotice(
+        "A strong password was generated and copied to your clipboard. Request a reset " +
+          "link below, then paste it as your new password — it only takes effect once it " +
+          "has been saved to your account.",
+      );
+    }
+    setBreachCount(null);
+    setGeneratorOpen(false);
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -46,6 +109,18 @@ export default function LoginPage() {
         );
       }
     } catch (err) {
+      // The server refuses to register a password found in breach data. Show
+      // that as the same breach warning + generate affordance as the live
+      // check instead of a generic error.
+      const serverBreachCount =
+        mode === "register" && err instanceof ApiError && err.status === 422
+          ? parseBreachWarningCount(err.message)
+          : null;
+      if (serverBreachCount !== null) {
+        setError(null);
+        setBreachCount(serverBreachCount);
+        return;
+      }
       setError(err instanceof Error ? err.message : "Something went wrong");
       // 409 from register means the address is taken — point them at sign-in
       // (or reset) instead of leaving a dead end.
@@ -92,7 +167,7 @@ export default function LoginPage() {
                 <button
                   key={m}
                   type="button"
-                  onClick={() => setMode(m)}
+                  onClick={() => switchMode(m)}
                   className={`flex-1 cursor-pointer rounded-lg px-3 py-1.5 font-medium capitalize transition-colors ${
                     mode === m
                       ? "bg-white/15 text-ink shadow-inset"
@@ -124,6 +199,16 @@ export default function LoginPage() {
               )}
             </div>
           )}
+          {mode !== "forgot" && breachCount !== null && (
+            <PasswordBreachWarning
+              count={breachCount}
+              surface={mode}
+              onGenerate={() => setGeneratorOpen(true)}
+            />
+          )}
+          {mode !== "forgot" && generatorOpen && (
+            <PasswordGenerator surface={mode} onUse={(generated) => void applyGenerated(generated)} />
+          )}
           {mode === "register" && (
             <Switch
               checked={consent}
@@ -145,7 +230,7 @@ export default function LoginPage() {
             <button
               type="button"
               onClick={() => {
-                setMode("forgot");
+                switchMode("forgot");
                 setError(null);
                 setNotice(null);
               }}
@@ -179,7 +264,7 @@ export default function LoginPage() {
             <button
               type="button"
               onClick={() => {
-                setMode("login");
+                switchMode("login");
                 setError(null);
                 setNotice(null);
               }}

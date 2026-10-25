@@ -48,6 +48,27 @@ export async function checkPasswordPwned(
 }
 
 /**
+ * Live detection of a compromised password, using the exact same checker the
+ * rest of CRIX uses. Returns the breach count when the password is found, or
+ * `null` in every other case — including provider failure, where NO verdict
+ * exists and the UI must never imply the password is clean.
+ */
+export async function detectBreachedPassword(
+  password: string,
+  rangeFetcher: (prefix: string) => Promise<{ suffixes: string }>,
+): Promise<{ count: number } | null> {
+  if (!password) return null;
+  try {
+    const result = await checkPasswordPwned(password, rangeFetcher);
+    return result.pwned || result.count > 0 ? { count: result.count } : null;
+  } catch {
+    // Timeout, 5xx, malformed body: no verdict — show nothing rather than a
+    // false all-clear. The caller decides how to surface "not checked".
+    return null;
+  }
+}
+
+/**
  * Compare two passwords for reuse WITHOUT sending either anywhere. Only the
  * boolean result is ever transmitted to the server.
  */

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { KeyRound, MailCheck } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { PasswordGenerator } from "@/components/PasswordGenerator";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 
@@ -18,6 +19,17 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  const [generatorOpen, setGeneratorOpen] = useState(false);
+
+  // "Use this password" on this screen fills both fields only — saving still
+  // goes through the normal submit below, so a generated value can never
+  // change the account's password on its own.
+  function applyGenerated(generated: string) {
+    setPassword(generated);
+    setConfirm(generated);
+    setError(null);
+    setGeneratorOpen(false);
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -94,6 +106,21 @@ export default function ResetPasswordPage() {
             autoComplete="new-password"
           />
         </div>
+
+        {!generatorOpen ? (
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => setGeneratorOpen(true)}
+            data-testid="generate-safe-password"
+            className="w-full"
+            disabled={busy}
+          >
+            Generate a safe password
+          </Button>
+        ) : (
+          <PasswordGenerator surface="reset" onUse={applyGenerated} />
+        )}
 
         {error && (
           <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
